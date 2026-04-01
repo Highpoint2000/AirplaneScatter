@@ -22,7 +22,7 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 ## Installation notes:
 
 1. [Download](https://github.com/Highpoint2000/AirplaneScatter/releases) the last repository as a zip
-2. Unpack all files from the plugins folder to ..fm-dx-webserver-main\plugins\ 
+2. Unpack all files from the folder to ..fm-dx-webserver-main\plugins\ 
 3. Stop or close the fm-dx-webserver
 4. Start/Restart the fm-dx-webserver with "npm run webserver" on node.js console, check the console informations
 5. Activate the sysinfo plugin in the settings
