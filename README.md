@@ -1,7 +1,9 @@
-# Airplane Scutter
+# Airplane Scatter
 Predicts and visualizes real-time airplane scatter opportunities for FM radio reception by combining live ADS-B flight tracking with transmitter databases and elevation profiles.
 
-<img width="1224" height="849" alt="grafik" src="https://github.com/user-attachments/assets/936e4701-af1a-42b5-bdec-0706c87451d2" />
+<img width="1000" height="420" alt="grafik" src="https://github.com/user-attachments/assets/5c61c219-b5dc-47a8-807b-5eef553af9d4" />
+<img width="1000" height="420" alt="grafik" src="https://github.com/user-attachments/assets/abd79278-9805-42f8-9efd-1b92d92d5178" />
+
 
 
 ## Version 1.0
