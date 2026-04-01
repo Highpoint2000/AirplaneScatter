@@ -1,35 +1,20 @@
-(() => {
+///////////////////////////////////////////////////////////////
+//                                                           //
+//  AIRPLANE SCATTER PLUGIN FOR FM-DX-WEBSERVER (V1.0)       //
+//                                                           //
+//  by Highpoint                last update: 2026-04-01      //
+//                                                           //
+//  https://github.com/Highpoint2000/RDS-AI-Decoder          //
+//                                                           //
+///////////////////////////////////////////////////////////////
 
-////////////////////////////////////////////////////////////
-///                                                      ///
-///  AIRPLANESCATTER PLUGIN FOR FM-DX-WEBSERVER               ///
-///                                                      ///
-///  by Highpoint                                        ///
-///                                                      ///
-///  Aircraft Scatter Map v1.62                          ///
-///  + Added Country Flags to List, Tooltips and Details ///
-///  + Added "1 station selected" clear-filter indicator ///
-///  + RX & TX Mouseover Tooltips with detailed data     ///
-///  + UI Update: Shows [ITU] instead of Freq in list    ///
-///  + Fixed Re-Open Bug (Clean destruction of map)      ///
-///  + Fixed elevation profile ghost planes              ///
-///  + Decoupled tracking time to prevent jumping        ///
-///  + Keep all valid scatter lines visible on map       ///
-///  + Restored 15s update interval                      ///
-///  + Added Antenna Elevation Angle Limit (Max 9°)      ///
-///  + Smart FMDX DB Caching (100km radius / 24h)        ///
-///  + Restored Compass & Freq Filters (Combinable)      ///
-///  + Auto-Tune on Frequency Filter Input               ///
-///  + Persistent Window Size and Position on Re-Open    ///
-///  + Auto Update Check (Github)                        ///
-///                                                      ///
-////////////////////////////////////////////////////////////
+(() => {
 
     // ── Plugin metadata & Update Check ────────────────────────────────────
     const pluginVersion     = "1.0";
     const pluginName        = "Airplane Scatter";
     const pluginHomepageUrl = "https://github.com/highpoint2000/AirplaneScatter/releases";
-    const pluginUpdateUrl   = "https://raw.githubusercontent.com/highpoint2000/AirplaneScatter/main/airplanescatter.js";
+    const pluginUpdateUrl   = "https://raw.githubusercontent.com/Highpoint2000/AirplaneScatter/refs/heads/main/AirplaneScatter/airplanescatter.js";
     const CHECK_FOR_UPDATES = true;
 
     function _checkUpdate() {
@@ -173,6 +158,7 @@
     const COUNTRY_CACHE_TTL      = 24 * 60 * 60 * 1000; // 24 hours
 
     let ituToFlag = null;
+	const _flagHtmlCache = {};
 
     async function loadCountryLookup() {
         try {
@@ -212,11 +198,14 @@
 
     function getFlagImg(itu, w=16, h=12) {
         if (!ituToFlag || !itu) return '';
+        const key = itu.toUpperCase() + '_' + w + '_' + h;
+        if (_flagHtmlCache[key] !== undefined) return _flagHtmlCache[key];
         const flagCode = ituToFlag[itu.toUpperCase()];
-        if (!flagCode || flagCode === 'xx') return '';
-        return `<img src="https://flagcdn.com/24x18/${flagCode}.png" style="vertical-align:middle; width:${w}px; height:${h}px; border-radius:2px; box-shadow:0 0 2px rgba(0,0,0,0.5);" alt="${itu}">`;
+        if (!flagCode || flagCode === 'xx') { _flagHtmlCache[key] = ''; return ''; }
+        const html = `<img src="https://flagcdn.com/24x18/${flagCode}.png" style="vertical-align:middle; width:${w}px; height:${h}px; border-radius:2px; box-shadow:0 0 2px rgba(0,0,0,0.5);" alt="${itu}">`;
+        _flagHtmlCache[key] = html;
+        return html;
     }
-
     // ── Elevation caches ──────────────────────────────────────────────────
     const ELEV_CACHE_KEY = 'as_elev_cache';
     let _elevCache = {};
@@ -525,6 +514,8 @@
             background: #4aaeff; cursor: ns-resize; border: 2px solid #1a2535;
         }
         #as-profile-y-zoom::-webkit-slider-thumb:hover { background: #fff; }
+		#as-help-btn{text-decoration:none!important;}
+        #as-help-btn:hover{color:#fff!important;text-decoration:none!important;}
     `;
     document.head.appendChild(style);
 
@@ -1391,38 +1382,77 @@
 
         const sortedAc = [...crossings].sort((a,b) => Math.abs(a.liveEta) - Math.abs(b.liveEta));
 
-        let newHtml = '';
         if(!sortedAc.length){
-            newHtml='<div style="padding:10px;color:#446;font-size:11px;">No active candidates</div>'; 
-        } else {
-            newHtml = sortedAc.map(cr => {
-                const approaching = cr.liveEta > (S.leadTimeSec/2) ? 'as-list-approaching' : '';
-                const tKey = cr.tx.lat+'_'+cr.tx.lon+'_'+cr.tx.freq;
+            const empty = '<div style="padding:10px;color:#446;font-size:11px;">No active candidates</div>';
+            if(body.innerHTML !== empty) body.innerHTML = empty;
+            return;
+        }
+
+        // Build a map of what's currently rendered
+        const existingItems = {};
+        body.querySelectorAll('.as-list-item[data-tx-key]').forEach(el => {
+            const k = el.dataset.txKey + '|' + (el.dataset.icao || '');
+            existingItems[k] = el;
+        });
+
+        const newKeys = new Set();
+        sortedAc.forEach((cr, idx) => {
+            const tKey = cr.tx.lat+'_'+cr.tx.lon+'_'+cr.tx.freq;
+            const icao = cr.ac.icao24;
+            const mapKey = tKey + '|' + icao;
+            newKeys.add(mapKey);
+
+            const approaching = cr.liveEta > (S.leadTimeSec/2) ? 'as-list-approaching' : '';
+            const etaClass_ = etaClass(cr.liveEta);
+            const scoreColorVal = scoreColor(cr.score);
+
+            if(existingItems[mapKey]) {
+                // Surgical update: only ETA and score
+                const el = existingItems[mapKey];
+                el.className = 'as-list-item ' + approaching;
+
+                const scoreEl = el.querySelector('.as-li-score');
+                if(scoreEl) { scoreEl.textContent = cr.score + '%'; scoreEl.style.color = scoreColorVal; }
+
+                const etaEl = el.querySelector('.as-li-eta');
+                if(etaEl) { etaEl.textContent = fmtEta(cr.liveEta); etaEl.className = 'as-li-eta ' + etaClass_; }
+
+                // Ensure correct position
+                const children = [...body.children];
+                if(children.indexOf(el) !== idx) {
+                    body.insertBefore(el, body.children[idx] || null);
+                }
+            } else {
+                // New item — build full HTML including flag (only once per item)
                 const flagHtml = getFlagImg(cr.tx.itu, 16, 12);
                 const prefix = flagHtml ? flagHtml + ' ' : '→ ';
-                return `<div class="as-list-item ${approaching}" data-tx-key="${tKey}">
+
+                const el = document.createElement('div');
+                el.className = 'as-list-item ' + approaching;
+                el.dataset.txKey = tKey;
+                el.dataset.icao = icao;
+                el.innerHTML = `
                     <div class="as-li-top">
                         <span class="as-li-ac">✈ ${cr.ac.callsign||cr.ac.icao24}</span>
-                        <span class="as-li-score" style="color:${scoreColor(cr.score)}">${cr.score}%</span>
+                        <span class="as-li-score" style="color:${scoreColorVal}">${cr.score}%</span>
                     </div>
                     <div class="as-li-top" style="margin-top:2px;">
                         <span class="as-li-tx">${prefix}${cr.tx.city} [${cr.tx.itu}]</span>
-                        <span class="as-li-eta ${etaClass(cr.liveEta)}">${fmtEta(cr.liveEta)}</span>
-                    </div>
-                </div>`;
-            }).join('');
-        }
-
-        if(body.innerHTML !== newHtml) {
-            body.innerHTML = newHtml;
-            body.querySelectorAll('.as-list-item').forEach(el => {
+                        <span class="as-li-eta ${etaClass_}">${fmtEta(cr.liveEta)}</span>
+                    </div>`;
                 el.addEventListener('click', () => {
-                    const txKey = el.dataset.txKey;
-                    const txObj = Object.values(_persistentCrossings).flatMap(m=>Object.values(m)).find(c=>(c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq)===txKey)?.tx;
-                    if(txObj) showTxDetails(txKey, txObj);
+                    const txObj = Object.values(_persistentCrossings).flatMap(m=>Object.values(m)).find(c=>(c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq)===tKey)?.tx;
+                    if(txObj) showTxDetails(tKey, txObj);
                 });
-            });
-        }
+
+                body.insertBefore(el, body.children[idx] || null);
+            }
+        });
+
+        // Remove stale items
+        Object.entries(existingItems).forEach(([k, el]) => {
+            if(!newKeys.has(k)) el.remove();
+        });
     }
 
     async function showTxDetails(txKey, tx) {
@@ -1488,59 +1518,88 @@
     function renderTxDetailsContent(txKey, tx) {
         const bd = document.getElementById('as-tx-detail-body');
         if(!bd) return;
-        
-        const siblings = txSiblings(tx);
-        const progsRows = siblings.map(t => {
-            const progName = t.station || t.ps || '?';
-            const tuneCmd = `T${Math.round(t.freq * 1000)}`;
-            return `
-            <tr>
-                <td style="color:#4aaeff; white-space:nowrap; cursor:pointer;" 
-                    title="Click to tune"
-                    onmouseover="this.style.textDecoration='underline'; this.style.color='#fff';" 
-                    onmouseout="this.style.textDecoration='none'; this.style.color='#4aaeff';"
-                    onclick="if(typeof socket !== 'undefined' && socket.readyState === 1) { socket.send('${tuneCmd}'); } else { alert('WebSocket is not connected'); }">
-                    ${t.freq.toFixed(2)} MHz
-                </td>
-                <td style="color:#fff; width:100%; max-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${progName}">${progName}</td>
-                <td style="color:#889; text-align:center; padding:0 8px;">${t.pol||'—'}</td>
-                <td style="color:#cde; text-align:right; white-space:nowrap;">${t.erp} kW</td>
-            </tr>
-            `;
-        }).join('');
-        
+
         const rx = getRxCoords();
         const allCrs = getActiveVisibleCrossings().filter(c => (c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq) === txKey);
         allCrs.sort((a,b) => Math.abs(a.liveEta) - Math.abs(b.liveEta));
 
-        const acList = allCrs.map(c => `
-            <div class="tx-ac-row">
-                <span style="color:#fff;">✈ ${c.ac.callsign||c.ac.icao24}</span>
-                <span>
-                    <span style="color:${scoreColor(c.score)}; margin-right:6px; font-weight:bold;">${c.score}%</span>
-                    <span class="as-countdown-cell ${etaClass(c.liveEta)}">${fmtEta(c.liveEta)}</span>
-                </span>
-            </div>
-        `).join('');
+        if (!bd.dataset.txKey || bd.dataset.txKey !== txKey) {
+            bd.dataset.txKey = txKey;
 
-        const flagHtml = getFlagImg(tx.itu, 20, 15);
+            const siblings = txSiblings(tx);
+            const progsRows = siblings.map(t => {
+                const progName = t.station || t.ps || '?';
+                const tuneCmd = `T${Math.round(t.freq * 1000)}`;
+                return `
+                <tr>
+                    <td style="color:#4aaeff; white-space:nowrap; cursor:pointer;"
+                        title="Click to tune"
+                        onmouseover="this.style.textDecoration='underline'; this.style.color='#fff';"
+                        onmouseout="this.style.textDecoration='none'; this.style.color='#4aaeff';"
+                        onclick="if(typeof socket !== 'undefined' && socket.readyState === 1) { socket.send('${tuneCmd}'); } else { alert('WebSocket is not connected'); }">
+                        ${t.freq.toFixed(2)} MHz
+                    </td>
+                    <td style="color:#fff; width:100%; max-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${progName}">${progName}</td>
+                    <td style="color:#889; text-align:center; padding:0 8px;">${t.pol||'—'}</td>
+                    <td style="color:#cde; text-align:right; white-space:nowrap;">${t.erp} kW</td>
+                </tr>`;
+            }).join('');
 
-        bd.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <div style="font-size:13px; font-weight:bold; color:#fff;">${tx.city} [${tx.itu}]</div>
-                ${flagHtml ? `<div>${flagHtml}</div>` : ''}
-            </div>
-            <table class="tx-info-table">
-                <tr><td>Distance</td><td>${tx.dist} km</td></tr>
-                <tr><td>Azimuth</td><td>${rx ? Math.round(bearingDeg(rx.lat, rx.lon, tx.lat, tx.lon))+'°' : '—'}</td></tr>
-                <tr><td>Terrain</td><td>${tx.terrainM||0} m</td></tr>
-            </table>
-            <div style="margin-bottom:10px; background:#162032; padding:4px 6px; border-radius:4px;">
-                <table class="tx-freq-table">${progsRows}</table>
-            </div>
-            <div style="color:#889; font-size:11px; margin-bottom:4px; border-bottom:1px solid #2a4a7a; padding-bottom:2px;">Crossing Aircraft</div>
-            ${acList || '<div style="color:#668;font-size:11px;">No aircraft in window.</div>'}
-        `;
+            const flagHtml = getFlagImg(tx.itu, 20, 15);
+
+            bd.innerHTML = `
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <div style="font-size:13px; font-weight:bold; color:#fff;">${tx.city} [${tx.itu}]</div>
+                    ${flagHtml ? `<div>${flagHtml}</div>` : ''}
+                </div>
+                <table class="tx-info-table">
+                    <tr><td>Distance</td><td>${tx.dist} km</td></tr>
+                    <tr><td>Azimuth</td><td>${rx ? Math.round(bearingDeg(rx.lat, rx.lon, tx.lat, tx.lon))+'°' : '—'}</td></tr>
+                    <tr><td>Terrain</td><td>${tx.terrainM||0} m</td></tr>
+                </table>
+                <div style="margin-bottom:10px; background:#162032; padding:4px 6px; border-radius:4px;">
+                    <table class="tx-freq-table">${progsRows}</table>
+                </div>
+                <div style="color:#889; font-size:11px; margin-bottom:4px; border-bottom:1px solid #2a4a7a; padding-bottom:2px;">Crossing Aircraft</div>
+                <div id="as-tx-ac-list"></div>
+            `;
+        }
+
+        const acListEl = document.getElementById('as-tx-ac-list');
+        if (!acListEl) return;
+
+        if (allCrs.length === 0) {
+            const empty = '<div style="color:#668;font-size:11px;">No aircraft in window.</div>';
+            if (acListEl.innerHTML !== empty) acListEl.innerHTML = empty;
+            return;
+        }
+
+        const activeIcaos = new Set(allCrs.map(c => c.ac.icao24));
+
+        acListEl.querySelectorAll('[data-icao]').forEach(el => {
+            if (!activeIcaos.has(el.dataset.icao)) el.remove();
+        });
+
+        allCrs.forEach((c, idx) => {
+            const icao = c.ac.icao24;
+            let row = acListEl.querySelector(`[data-icao="${icao}"]`);
+            const etaHtml = `<span style="color:${scoreColor(c.score)}; margin-right:6px; font-weight:bold;">${c.score}%</span><span class="as-countdown-cell ${etaClass(c.liveEta)}">${fmtEta(c.liveEta)}</span>`;
+            const nameHtml = `✈ ${c.ac.callsign || c.ac.icao24}`;
+
+            if (!row) {
+                row = document.createElement('div');
+                row.className = 'tx-ac-row';
+                row.dataset.icao = icao;
+                row.innerHTML = `<span style="color:#fff;">${nameHtml}</span><span class="as-tx-eta-cell">${etaHtml}</span>`;
+
+                const rows = acListEl.querySelectorAll('[data-icao]');
+                if (idx < rows.length) acListEl.insertBefore(row, rows[idx]);
+                else acListEl.appendChild(row);
+            } else {
+                const etaCell = row.querySelector('.as-tx-eta-cell');
+                if (etaCell) etaCell.innerHTML = etaHtml;
+            }
+        });
     }
 
     function redrawFiltered() {
@@ -1751,6 +1810,7 @@
                 <div class="as-title"><i class="fas fa-plane"></i><span> Airplane Scatter</span></div>
                 <div id="as-header-info" style="color:#4aaeff; font-size:12px; font-weight:bold; cursor:pointer; display:none; flex:1; text-align:center;">1 station selected (click to clear)</div>
                 <div style="display:flex;align-items:center;gap:8px;">
+                    <a id="as-help-btn" href="https://highpoint.fmdx.org/manuals/AirplaneScatter-Documentation.html" target="_blank" title="Documentation" style="color:#adf;font-size:15px;padding:0 6px;line-height:1;text-decoration:none;display:flex;align-items:center;">&#63;</a>
                     <button id="as-settings-btn" title="Settings">&#9881;</button>
                     <button id="as-reload" title="Reload">&#8635;</button>
                     <button id="as-close" title="Close">&#x2715;</button>
@@ -1918,7 +1978,7 @@
     function addDrag(el, handle){
         let ox, oy, sl, st;
         handle.onmousedown = e => {
-            if(e.target.closest('button') || e.target.closest('input') || e.target.closest('#as-header-info')) return;
+            if(e.target.closest('button') || e.target.closest('input') || e.target.closest('#as-header-info') || e.target.closest('#as-help-btn')) return;
             e.preventDefault(); ox=e.clientX; oy=e.clientY; sl=el.offsetLeft; st=el.offsetTop;
             document.onmousemove = me => { el.style.left = Math.max(0, Math.min(sl+me.clientX-ox, window.innerWidth-el.offsetWidth)) + 'px'; el.style.top  = Math.max(0, Math.min(st+me.clientY-oy, window.innerHeight-el.offsetHeight)) + 'px'; };
             document.onmouseup = () => { localStorage.setItem('as_left', el.offsetLeft); localStorage.setItem('as_top', el.offsetTop); document.onmousemove = document.onmouseup = null; };
