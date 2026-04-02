@@ -1,8 +1,8 @@
 ///////////////////////////////////////////////////////////////
 //                                                           //
-//  AIRPLANE SCATTER PLUGIN FOR FM-DX-WEBSERVER (V1.0)       //
+//  AIRPLANE SCATTER PLUGIN FOR FM-DX-WEBSERVER (V1.1)       //
 //                                                           //
-//  by Highpoint                last update: 2026-04-01      //
+//  by Highpoint                last update: 2026-04-02      //
 //                                                           //
 //  https://github.com/Highpoint2000/RDS-AI-Decoder          //
 //                                                           //
@@ -11,7 +11,7 @@
 (() => {
 
     // ── Plugin metadata & Update Check ────────────────────────────────────
-    const pluginVersion     = "1.0";
+    const pluginVersion     = "1.1";
     const pluginName        = "Airplane Scatter";
     const pluginHomepageUrl = "https://github.com/highpoint2000/AirplaneScatter/releases";
     const pluginUpdateUrl   = "https://raw.githubusercontent.com/Highpoint2000/AirplaneScatter/refs/heads/main/AirplaneScatter/airplanescatter.js";
@@ -86,7 +86,7 @@
         return AC_SIZE_MULT[c] || (c[0] === 'A' ? 1.0 : 0.8);
     }
 
-    // ── Logging ────────────────���──────────────────────────────────────────
+    // ── Logging ──────────────────────────────────────────────────────────
     function debugLog(...args) {
         console.log(`[${pluginName}]`, ...args);
     }
@@ -130,6 +130,32 @@
         };
     }
     let S = loadSettings();
+	
+
+    let isAdminLoggedIn = false;
+    let isTuneLoggedIn = false;
+    let isLockAuthenticated = true;
+
+    // Global helper function to send the Rotor position
+    window._asSendRotorPosition = function(position) {
+        if (!isAdminLoggedIn && !isTuneLoggedIn) {
+            debugLog('Rotor turn rejected: Not authorized.');
+            return;
+        }
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            const message = JSON.stringify({
+                type: 'Rotor',
+                value: position.toString(),
+                lock: isLockAuthenticated,
+                source: ipAddress,
+                clientId: clientId
+            });
+            ws.send(message);
+            debugLog(`Sent Rotor position: ${position}°`);
+        } else {
+            debugLog('WebSocket is not connected. Cannot send Rotor position.');
+        }
+    };
 
     // ── Formatting Helpers ────────────────────────────────────────────────
     function fmtAlt(ft) { return S.useMetric ? Math.round(ft * 0.3048) + ' m' : Math.round(ft) + ' ft'; }
@@ -304,7 +330,7 @@
         }
     }
 
-    // ── State ─────────────────────────────────────────────────────────────
+    // ── State ────────────────────────────────────────────────────────────
     let mapActive            = false;
     let mapContainer         = null;
     let mapInstance          = null;
@@ -323,6 +349,7 @@
     let _txElements          = {}; 
     let ws                   = null;       // Data plugins WS
     let mainWebsocket        = null;       // Main Radio WS
+    let rdsWebsocket         = null;       // Radio text WS for freq updates
     let gpsLat               = null;
     let gpsLon               = null;
     
@@ -333,6 +360,12 @@
     let _activeTxKey         = null;   
     let _activeCompass       = null;
     let _activeFreq          = null; 
+    let isFreqLocked         = false; // Track if filter is locked to radio
+    let isCompassLocked      = false; // Track if compass filter is locked to rotor
+    let lastRotorAzimuth     = null;  // Store last received rotor position
+
+    // Generate unique client ID for PSTRotator compatibility
+    const clientId = Math.random().toString(36).substring(2);
 
     // Profile State
     let _activeProfileTxKey  = null;
@@ -350,6 +383,7 @@
     const WebserverPath = currentURL.pathname.replace(/setup/g, '');
     const protocol      = currentURL.protocol === 'https:' ? 'wss:' : 'ws:';
     const WEBSOCKET_URL = `${protocol}//${WebserverURL}:${WebserverPORT}${WebserverPath}data_plugins`;
+    const TEXT_WS_URL   = `${protocol}//${WebserverURL}:${WebserverPORT}${WebserverPath}text`;
 
     // ── CSS ───────────────────────────────────────────────────────────────
     const style = document.createElement('style');
@@ -433,12 +467,17 @@
         .as-comp-btn.active{background:#4aaeff;color:#000;font-weight:bold;border-color:#fff;}
         .as-comp-center{background:transparent;border:none;color:#f66;}
         .as-comp-center:hover{background:transparent;color:#f33;}
+        #as-compass-lock { background: transparent !important; border: none !important; color: #fff !important; font-size: 14px !important; transition: color 0.2s; }
+        #as-compass-lock:hover { color: #4aaeff !important; }
+        #as-compass-lock.locked { color: #f66 !important; }
 
         #as-freq-filter { position:absolute; top:105px; right:10px; z-index:1000; background:rgba(22,32,50,0.9); border:1px solid #2a4a7a; border-radius:6px; padding:4px; display:flex; gap:4px; box-shadow:0 2px 10px rgba(0,0,0,0.5); width: 100px; box-sizing: border-box; justify-content: space-between; align-items: center; }
         #as-freq-filter input { width: 65px !important; height: 24px !important; min-height: 24px !important; line-height: 24px !important; box-sizing: border-box !important; background: #1a2535 !important; border: 1px solid #2a4a7a !important; color: #fff !important; border-radius: 3px !important; padding: 0 4px !important; margin: 0 !important; font-size: 11px !important; text-align: center !important; }
         #as-freq-filter input:focus { outline: none !important; border-color: #4aaeff !important; }
-        #as-freq-clear { background: transparent !important; border: none !important; color: #f66 !important; cursor: pointer !important; font-size: 14px !important; font-weight: bold !important; padding: 0 !important; margin: 0 !important; display: flex !important; align-items: center !important; justify-content: center !important; width: 20px !important; height: 24px !important; line-height: 1 !important; }
-        #as-freq-clear:hover { color: #f33 !important; }
+        #as-freq-filter input:disabled { opacity: 0.7; cursor: not-allowed; }
+        #as-freq-lock { background: transparent !important; border: none !important; color: #fff !important; cursor: pointer !important; font-size: 16px !important; padding: 0 !important; margin: 0 !important; display: flex !important; align-items: center !important; justify-content: center !important; width: 20px !important; height: 24px !important; line-height: 1 !important; transition: color 0.2s; }
+        #as-freq-lock:hover { color: #4aaeff !important; }
+        #as-freq-lock.locked { color: #f66 !important; }
         
         #as-statusbar{background:#0d1420;color:#9bb;font-size:11px;padding:5px 12px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;border-top:1px solid #1e3050;flex-shrink:0; padding-right: 25px;}
         .as-dot{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:middle;margin-right:3px;}
@@ -602,11 +641,23 @@
     }
 
     function gridKey(lat,lon){ return Math.floor(lat/5)+'_'+Math.floor(lon/5); }
-    function buildTxGrid(stations){
-        const g={};
-        stations.forEach(tx=>{const k=gridKey(tx.lat,tx.lon);if(!g[k])g[k]=[];g[k].push(tx);});
+    
+	async function buildTxGridAsync(stations) {
+        const g = {};
+        let lastYield = performance.now();
+        for (let i = 0; i < stations.length; i++) {
+            if (performance.now() - lastYield > 10) {
+                await new Promise(r => setTimeout(r, 5)); // Give the browser time for Audio/UI
+                lastYield = performance.now();
+            }
+            const tx = stations[i];
+            const k = gridKey(tx.lat, tx.lon);
+            if (!g[k]) g[k] = [];
+            g[k].push(tx);
+        }
         return g;
     }
+	
     function nearbyTx(acLat,acLon){
         const r=[];
         for(let dlat=-1;dlat<=1;dlat++) for(let dlon=-1;dlon<=1;dlon++){
@@ -643,7 +694,7 @@
 
         if(d_tx < 5 || d_rx < 5 || d_txrx<S.minTxRxDistKm) return null; 
         
-        // Dynamisches Elevations-Limit (9 Grad) für Sende- & Empfangsantenne
+        // Dynamic elevation limit (9 degrees) for transmitting & receiving antenna
         const elevAngleTx = toDeg(Math.atan2(Math.max(0, altM - txEffM) / 1000, d_tx));
         const elevAngleRx = toDeg(Math.atan2(Math.max(0, altM - rxElevM) / 1000, d_rx));
         if (elevAngleTx > 9 || elevAngleRx > 9) return null;
@@ -705,9 +756,11 @@
             if (!activeIcaos.has(icao)) delete _persistentCrossings[icao];
         }
 
+        let lastYield = performance.now();
         for (let i = 0; i < robustAircraftList.length; i++) {
-            if (i > 0 && i % 25 === 0) {
-                await new Promise(r => setTimeout(r, 0)); 
+            if (performance.now() - lastYield > 10) {
+                await new Promise(r => setTimeout(r, 5)); 
+                lastYield = performance.now();
             }
 
             const ac = robustAircraftList[i];
@@ -746,6 +799,35 @@
         }
     }
 
+    function updateCompassFromRotor() {
+        if (!isCompassLocked || lastRotorAzimuth === null) return;
+        const az = lastRotorAzimuth;
+        let dirs = [];
+        
+        // 360 degrees divided into 16 sectors of 22.5 degrees each
+        if (az >= 348.75 || az < 11.25) dirs = ['N'];
+        else if (az >= 11.25 && az < 33.75) dirs = ['N', 'NO'];
+        else if (az >= 33.75 && az < 56.25) dirs = ['NO'];
+        else if (az >= 56.25 && az < 78.75) dirs = ['NO', 'O'];
+        else if (az >= 78.75 && az < 101.25) dirs = ['O'];
+        else if (az >= 101.25 && az < 123.75) dirs = ['O', 'SO'];
+        else if (az >= 123.75 && az < 146.25) dirs = ['SO'];
+        else if (az >= 146.25 && az < 168.75) dirs = ['SO', 'S'];
+        else if (az >= 168.75 && az < 191.25) dirs = ['S'];
+        else if (az >= 191.25 && az < 213.75) dirs = ['S', 'SW'];
+        else if (az >= 213.75 && az < 236.25) dirs = ['SW'];
+        else if (az >= 236.25 && az < 258.75) dirs = ['SW', 'W'];
+        else if (az >= 258.75 && az < 281.25) dirs = ['W'];
+        else if (az >= 281.25 && az < 303.75) dirs = ['W', 'NW'];
+        else if (az >= 303.75 && az < 326.25) dirs = ['NW'];
+        else if (az >= 326.25 && az < 348.75) dirs = ['NW', 'N'];
+
+        _activeCompass = dirs;
+        // DO NOT delete the selected station anymore!
+        // _activeTxKey = null; 
+        updateCompassUI();
+    }
+
     function getActiveVisibleCrossings() {
         const rx = getRxCoords(); if(!rx) return [];
         const out = [];
@@ -757,20 +839,40 @@
                 const liveEta = cr.etaSec - elapsed;
                 
                 if (liveEta <= S.leadTimeSec && liveEta >= -S.trailTimeSec) {
-                    if (_activeTxKey && tK !== _activeTxKey) continue;
-                    if (_activeCompass) {
+                    
+                    // Priority 1: If a station is explicitly selected
+                    if (_activeTxKey) {
+                        if (tK !== _activeTxKey) continue;
+                        // Ignore all background filters so the station remains open!
+                        out.push({...cr, liveEta, elapsed});
+                        continue;
+                    }
+                    
+                    // Priority 2: Normal filtering (compass directions)
+                    if (_activeCompass && _activeCompass.length > 0) {
                         const brg = bearingDeg(rx.lat, rx.lon, cr.tx.lat, cr.tx.lon);
                         const dirs = {N:[337.5,22.5], NO:[22.5,67.5], O:[67.5,112.5], SO:[112.5,157.5], S:[157.5,202.5], SW:[202.5,247.5], W:[247.5,292.5], NW:[292.5,337.5]};
-                        const d = dirs[_activeCompass];
-                        if (d) {
-                            const isMatch = d[0]>d[1] ? (brg>=d[0]||brg<d[1]) : (brg>=d[0]&&brg<d[1]);
-                            if (!isMatch) continue;
+                        
+                        let isMatch = false;
+                        for (let dir of _activeCompass) {
+                            const d = dirs[dir];
+                            if (d) {
+                                const match = d[0]>d[1] ? (brg>=d[0]||brg<d[1]) : (brg>=d[0]&&brg<d[1]);
+                                if (match) {
+                                    isMatch = true;
+                                    break;
+                                }
+                            }
                         }
+                        if (!isMatch) continue;
                     }
+                    
+                    // Priority 3: Normal filtering (frequency)
                     if (_activeFreq !== null) {
                         const match = txSiblings(cr.tx).some(t => Math.round(t.freq*100)===Math.round(_activeFreq*100));
                         if (!match) continue;
                     }
+                    
                     out.push({...cr, liveEta, elapsed});
                 }
             }
@@ -1546,6 +1648,25 @@
             }).join('');
 
             const flagHtml = getFlagImg(tx.itu, 20, 15);
+            
+            // Calculate azimuth and format HTML
+            let azHtml = '—';
+            if (rx) {
+                const az = Math.round(bearingDeg(rx.lat, rx.lon, tx.lat, tx.lon));
+                const canTurnRotor = (isAdminLoggedIn || isTuneLoggedIn) && lastRotorAzimuth !== null;
+                
+                if (canTurnRotor) {
+                    azHtml = `<span style="color:#4aaeff; cursor:pointer;" 
+                                    title="Click to turn Rotor to ${az}°"
+                                    onmouseover="this.style.textDecoration='underline'; this.style.color='#fff';"
+                                    onmouseout="this.style.textDecoration='none'; this.style.color='#4aaeff';"
+                                    onclick="if(window._asSendRotorPosition) window._asSendRotorPosition(${az});">
+                              ${az}°
+                              </span>`;
+                } else {
+                    azHtml = `${az}°`;
+                }
+            }
 
             bd.innerHTML = `
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
@@ -1554,7 +1675,7 @@
                 </div>
                 <table class="tx-info-table">
                     <tr><td>Distance</td><td>${tx.dist} km</td></tr>
-                    <tr><td>Azimuth</td><td>${rx ? Math.round(bearingDeg(rx.lat, rx.lon, tx.lat, tx.lon))+'°' : '—'}</td></tr>
+                    <tr><td>Azimuth</td><td>${azHtml}</td></tr>
                     <tr><td>Terrain</td><td>${tx.terrainM||0} m</td></tr>
                 </table>
                 <div style="margin-bottom:10px; background:#162032; padding:4px 6px; border-radius:4px;">
@@ -1626,25 +1747,49 @@
             if (_activeTxKey) {
                 infoEl.style.display = 'block';
                 infoEl.textContent = '1 station selected (click to clear)';
-            } else if (_activeCompass || _activeFreq) {
+            } else if ((_activeCompass && _activeCompass.length > 0) || _activeFreq || (isCompassLocked && lastRotorAzimuth !== null)) {
                 infoEl.style.display = 'block';
                 let txt = [];
-                if (_activeCompass) txt.push(`Direction: ${_activeCompass}`);
-                if (_activeFreq) txt.push(`Frequency: ${_activeFreq.toFixed(2)} MHz`);
+                if (_activeCompass && _activeCompass.length > 0) txt.push(`${_activeCompass.join(' & ')}`);
+                if (_activeFreq) txt.push(`${_activeFreq.toFixed(2)} MHz`);
+                if (isCompassLocked && lastRotorAzimuth !== null) txt.push(`Rotor: ${lastRotorAzimuth}°`);
                 infoEl.textContent = `Filtered by ${txt.join(' | ')} (click to clear)`;
             } else {
                 infoEl.style.display = 'none';
             }
             
             infoEl.onclick = () => {
-                if(_activeTxKey) hideTxDetails();
-                _activeTxKey = null;
-                _activeCompass = null;
-                _activeFreq = null;
-                const freqInp = document.getElementById('as-freq-input');
-                if (freqInp) freqInp.value = '';
-                updateCompassUI();
-                redrawFiltered();
+                if (_activeTxKey) {
+                    // Case 1: Station is selected -> Only close station
+                    hideTxDetails(); 
+                } else {
+                    // Case 2: No station selected -> Remove all filters and locks
+                    isCompassLocked = false;
+                    _activeCompass = null;
+                    const compassLockBtn = document.getElementById('as-compass-lock');
+                    if (compassLockBtn) {
+                        compassLockBtn.textContent = '🔓';
+                        compassLockBtn.classList.remove('locked');
+                        compassLockBtn.title = "Lock Compass to Rotor";
+                    }
+
+                    isFreqLocked = false;
+                    _activeFreq = null;
+                    const freqInp = document.getElementById('as-freq-input');
+                    if (freqInp) {
+                        freqInp.disabled = false;
+                        freqInp.value = '';
+                    }
+                    const freqLockBtn = document.getElementById('as-freq-lock');
+                    if (freqLockBtn) {
+                        freqLockBtn.textContent = '🔓';
+                        freqLockBtn.classList.remove('locked');
+                        freqLockBtn.title = "Lock Frequency to Radio";
+                    }
+
+                    updateCompassUI();
+                    redrawFiltered();
+                }
             };
         }
     }
@@ -1675,6 +1820,39 @@
             } catch (error) {
                 debugLog("Error during Main WebSocket setup:", error);
             }
+        }
+    }
+
+    // Radio text/status WS to fetch current frequency automatically
+    function setupRdsWebSocket() {
+        if (rdsWebsocket && rdsWebsocket.readyState !== WebSocket.CLOSED) return;
+        try {
+            rdsWebsocket = new WebSocket(TEXT_WS_URL);
+            rdsWebsocket.addEventListener('message', evt => {
+                if (!isFreqLocked) return;
+                try {
+                    const data = JSON.parse(evt.data);
+                    let newFreq = null;
+                    if (data.freq !== undefined) newFreq = parseFloat(data.freq);
+                    else if (data.frequency !== undefined) newFreq = parseFloat(data.frequency);
+                    else if (data.status && data.status.freq !== undefined) newFreq = parseFloat(data.status.freq);
+                    
+                    if (newFreq !== null) {
+                        if (newFreq > 8700) newFreq = newFreq / 100;
+                        else if (newFreq >= 870 && newFreq <= 1080) newFreq = newFreq / 10;
+                        
+                        const freqInp = document.getElementById('as-freq-input');
+                        if (freqInp && freqInp.value !== newFreq.toFixed(2)) {
+                            freqInp.value = newFreq.toFixed(2);
+                            _activeFreq = newFreq;
+                            redrawFiltered();
+                        }
+                    }
+                } catch(e) {}
+            });
+            rdsWebsocket.addEventListener('close', () => setTimeout(setupRdsWebSocket, 5000));
+        } catch (e) {
+            debugLog("Error during RDS WebSocket setup:", e);
         }
     }
 
@@ -1769,13 +1947,13 @@
     function createMapContainer(rxLat,rxLon){
         if(mapContainer) return;
         
-        // Neu lesen beim Öffnen!
+        // Read again when opening!
         let startLeft   = parseInt(localStorage.getItem('as_left'))   || 240;
         let startTop    = parseInt(localStorage.getItem('as_top'))    || 20;
         let startWidth  = parseInt(localStorage.getItem('as_width'))  || 820;
         let startHeight = parseInt(localStorage.getItem('as_height')) || 640;
 
-        // Bounds Check damit es nicht offscreen aufpoppt
+        // Bounds check so it doesn't pop up offscreen
         if (startLeft < 0) startLeft = 0;
         if (startTop < 0) startTop = 0;
         if (startLeft > window.innerWidth - 100) startLeft = window.innerWidth - 300;
@@ -1805,6 +1983,12 @@
         mapContainer.id = 'as-container';
         mapContainer.style.width = startWidth + 'px';
         
+        // Check if we need to show the lock or the X
+        const showLock = lastRotorAzimuth !== null;
+        const lockIcon = isCompassLocked ? '🔒' : '🔓';
+        const lockTitle = isCompassLocked ? 'Unlock Compass' : 'Lock Compass to Rotor';
+        const lockClass = isCompassLocked ? 'locked' : '';
+
         mapContainer.innerHTML = `
             <div id="as-header">
                 <div class="as-title"><i class="fas fa-plane"></i><span> Airplane Scatter</span></div>
@@ -1825,7 +2009,8 @@
                     <button class="as-comp-btn" data-dir="N">N</button>
                     <button class="as-comp-btn" data-dir="NO">NO</button>
                     <button class="as-comp-btn" data-dir="W">W</button>
-                    <button class="as-comp-btn as-comp-center" data-dir="ALL">✕</button>
+                    <button class="as-comp-btn as-comp-center" id="as-compass-clear" data-dir="ALL" style="display:${showLock ? 'none' : 'flex'};">✕</button>
+                    <button class="as-comp-btn as-comp-center ${lockClass}" id="as-compass-lock" title="${lockTitle}" style="display:${showLock ? 'flex' : 'none'};">${lockIcon}</button>
                     <button class="as-comp-btn" data-dir="O">O</button>
                     <button class="as-comp-btn" data-dir="SW">SW</button>
                     <button class="as-comp-btn" data-dir="S">S</button>
@@ -1834,7 +2019,7 @@
 
                 <div id="as-freq-filter" class="leaflet-control">
                     <input type="text" id="as-freq-input" placeholder="MHz">
-                    <button id="as-freq-clear" title="Clear Filter">✕</button>
+                    <button id="as-freq-lock" title="Lock Frequency to Radio">🔓</button>
                 </div>
 
                 <div id="as-profile-panel">
@@ -1888,21 +2073,97 @@
             });
         }
         
-        const freqClear = document.getElementById('as-freq-clear');
-        if (freqClear) {
-            freqClear.addEventListener('click', () => {
-                if (freqInp) freqInp.value = ''; _activeFreq = null; redrawFiltered();
+        const freqLock = document.getElementById('as-freq-lock');
+        if (freqLock) {
+            freqLock.addEventListener('click', () => {
+                isFreqLocked = !isFreqLocked;
+                if (isFreqLocked) {
+                    freqLock.textContent = '🔒';
+                    freqLock.classList.add('locked');
+                    freqLock.title = "Unlock Frequency";
+                    if (freqInp) freqInp.disabled = true;
+                } else {
+                    freqLock.textContent = '🔓';
+                    freqLock.classList.remove('locked');
+                    freqLock.title = "Lock Frequency to Radio";
+                    if (freqInp) {
+                        freqInp.disabled = false;
+                        freqInp.value = '';
+                    }
+                    _activeFreq = null;
+                    redrawFiltered();
+                }
             });
         }
 
         ensureLeaflet(()=>{
-            document.querySelectorAll('.as-comp-btn').forEach(b => {
+            if (freqLock) {
+                freqLock.addEventListener('mousedown', L.DomEvent.stopPropagation);
+                freqLock.addEventListener('dblclick', L.DomEvent.stopPropagation);
+            }
+
+            const compassClearBtn = document.getElementById('as-compass-clear');
+            if (compassClearBtn) {
+                compassClearBtn.addEventListener('click', (e) => {
+                    L.DomEvent.stopPropagation(e);
+                    _activeCompass = null; 
+                    _activeTxKey = null; 
+                    updateCompassUI(); redrawFiltered();
+                });
+                compassClearBtn.addEventListener('mousedown', L.DomEvent.stopPropagation);
+                compassClearBtn.addEventListener('dblclick', L.DomEvent.stopPropagation);
+            }
+
+            const compassLockBtn = document.getElementById('as-compass-lock');
+            if (compassLockBtn) {
+                compassLockBtn.addEventListener('click', (e) => {
+                    L.DomEvent.stopPropagation(e);
+                    isCompassLocked = !isCompassLocked;
+                    if (isCompassLocked) {
+                        compassLockBtn.textContent = '🔒';
+                        compassLockBtn.classList.add('locked');
+                        compassLockBtn.title = "Unlock Compass";
+                        updateCompassFromRotor();
+                    } else {
+                        compassLockBtn.textContent = '🔓';
+                        compassLockBtn.classList.remove('locked');
+                        compassLockBtn.title = "Lock Compass to Rotor";
+                    }
+                    updateCompassUI();
+                    redrawFiltered();
+                });
+                compassLockBtn.addEventListener('mousedown', L.DomEvent.stopPropagation);
+                compassLockBtn.addEventListener('dblclick', L.DomEvent.stopPropagation);
+            }
+
+            // Adjust the event for the compass buttons in ensureLeaflet from createMapContainer():
+            document.querySelectorAll('.as-comp-btn:not(.as-comp-center)').forEach(b => {
                 b.addEventListener('click', (e) => {
                     L.DomEvent.stopPropagation(e);
+                    if (isCompassLocked) return; // If locked to rotor, block manual input
+                    
                     const dir = e.target.dataset.dir;
-                    if(dir === 'ALL') { _activeCompass = null; _activeTxKey = null; } 
-                    else { _activeCompass = _activeCompass === dir ? null : dir; _activeTxKey = null; }
-                    updateCompassUI(); redrawFiltered();
+                    
+                    // If no direction is active yet, start a new array
+                    if (!_activeCompass) {
+                        _activeCompass = [dir];
+                    } else {
+                        // If the direction is already in the array, remove it
+                        if (_activeCompass.includes(dir)) {
+                            _activeCompass = _activeCompass.filter(d => d !== dir);
+                            // If no direction is left, set the filter to null (deactivated)
+                            if (_activeCompass.length === 0) {
+                                _activeCompass = null;
+                            }
+                        } else {
+                            // If the direction is not yet in the array, add it
+                            _activeCompass.push(dir);
+                        }
+                    }
+                    
+                    _activeTxKey = null; 
+                    updateCompassUI(); 
+                    redrawFiltered();
                 });
                 b.addEventListener('mousedown', L.DomEvent.stopPropagation);
                 b.addEventListener('dblclick', L.DomEvent.stopPropagation);
@@ -1911,9 +2172,6 @@
             if (freqInp) {
                 freqInp.addEventListener('mousedown', L.DomEvent.stopPropagation);
                 freqInp.addEventListener('dblclick', L.DomEvent.stopPropagation);
-            }
-            if (freqClear) {
-                freqClear.addEventListener('mousedown', L.DomEvent.stopPropagation);
             }
 
             const mapDiv = document.getElementById('as-leaflet-wrap');
@@ -1936,16 +2194,22 @@
     }
 
     function setTxFilter(txKey) {
-        _activeTxKey = txKey; _activeCompass = null; _activeFreq = null;
-        const freqInp = document.getElementById('as-freq-input');
-        if (freqInp) freqInp.value = '';
-        redrawFiltered();
+        _activeTxKey = txKey; 
+
     }
 
     function updateCompassUI() {
-        document.querySelectorAll('.as-comp-btn').forEach(b => {
-            if(b.dataset.dir === _activeCompass) b.classList.add('active');
+        document.querySelectorAll('.as-comp-btn:not(.as-comp-center)').forEach(b => {
+            if(_activeCompass && _activeCompass.includes(b.dataset.dir)) b.classList.add('active');
             else b.classList.remove('active');
+            
+            if (isCompassLocked) {
+                b.style.opacity = '0.5';
+                b.style.cursor = 'not-allowed';
+            } else {
+                b.style.opacity = '1';
+                b.style.cursor = 'pointer';
+            }
         });
     }
 
@@ -1971,6 +2235,8 @@
                 _activeCompass = null;
                 _activeFreq = null;
                 _activeTxKey = null;
+                isFreqLocked = false;
+                isCompassLocked = false;
             }); 
         }
     }
@@ -2008,13 +2274,119 @@
         return null;
     }
     
-    function setupGpsWebSocket(){
+    let ipAddress = null;
+
+    async function fetchIpAddress() {
+        const host = WebserverURL; 
+        if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host)) {
+            return host;
+        }
+        try {
+            const dnsRes = await fetch(`https://dns.google/resolve?name=${host}&type=A`);
+            const dnsJson = await dnsRes.json();
+            if (dnsJson.Answer && dnsJson.Answer.length) {
+                const aRecord = dnsJson.Answer.find(r => r.type === 1);
+                if (aRecord && aRecord.data) {
+                    return aRecord.data;
+                }
+            }
+        } catch (e) {}
+        try {
+            const res = await fetch('https://api.ipify.org?format=json');
+            const json = await res.json();
+            return json.ip;
+        } catch (e) {}
+        return host;
+    }
+
+    function setupDataPluginsWebSocket(){
         if(ws&&ws.readyState!==WebSocket.CLOSED) return;
         try{
             ws=new WebSocket(WEBSOCKET_URL);
-            ws.addEventListener('message',evt=>{ try{const d=JSON.parse(evt.data);if(d.type==='GPS'&&d.value?.status==='active'){gpsLat=parseFloat(d.value.lat);gpsLon=parseFloat(d.value.lon);}}catch(e){} });
-            ws.addEventListener('close',()=>setTimeout(setupGpsWebSocket,5000));
-        }catch(e){}
+            ws.addEventListener('open', async () => {
+                debugLog('DataPlugins WS opened. Fetching IP...');
+                if (!ipAddress) {
+                    ipAddress = await fetchIpAddress();
+                }
+                debugLog(`IP fetched: ${ipAddress}. Sending Rotor request...`);
+                // Send Rotor position request on connect
+                const requestPayload = JSON.stringify({
+                    type: 'Rotor',
+                    value: 'request',
+                    source: ipAddress,
+                    clientId: clientId
+                });
+                debugLog(`Sent payload: ${requestPayload}`);
+                ws.send(requestPayload);
+            });
+            
+            ws.addEventListener('message',evt=>{ 
+                try {
+                    const d=JSON.parse(evt.data);
+                    
+                    // GPS Parsing
+                    if(d.type==='GPS'&&d.value?.status==='active'){
+                        gpsLat=parseFloat(d.value.lat);
+                        gpsLon=parseFloat(d.value.lon);
+                    }
+                    
+                    // Rotor Parsing
+                    if(d.type==='Rotor'){
+                        // 1. Read auth data (important for admin rights)
+                        if (d.value === 'request' && d.clientId === clientId && d._auth) {
+                            isAdminLoggedIn = d._auth.admin === true;
+                            isTuneLoggedIn = d._auth.tune === true;
+                            debugLog(`Auth updated: Admin=${isAdminLoggedIn}, Tune=${isTuneLoggedIn}`);
+                        }
+                        
+                        // 2. Read lock status
+                        if (d.lock !== undefined) {
+                            isLockAuthenticated = d.lock;
+                        }
+
+                        // 3. Process real server responses from PST Rotator (127.0.0.1)
+                        if (d.value !== undefined && d.value !== 'request' && d.source === '127.0.0.1') {
+                            const pos = parseFloat(d.value);
+                            
+                            if(!isNaN(pos) && pos >= 0 && pos <= 360){
+                                lastRotorAzimuth = pos === 360 ? 0 : pos;
+                                
+                                // Show lock button and remove red X when real server data arrives
+                                const compassLockBtn = document.getElementById('as-compass-lock');
+                                const compassClearBtn = document.getElementById('as-compass-clear');
+                                
+                                if (compassLockBtn && compassLockBtn.style.display === 'none') {
+                                    compassLockBtn.style.display = 'flex'; 
+                                    if (compassClearBtn) compassClearBtn.style.display = 'none';
+                                    
+                                    // Re-render detail view if open, to make azimuth clickable
+                                    if (_activeTxKey && document.getElementById('as-tx-detail-panel').style.display === 'flex') {
+                                        const txObj = Object.values(_persistentCrossings).flatMap(m=>Object.values(m)).find(c=>(c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq)===_activeTxKey)?.tx;
+                                        if(txObj) renderTxDetailsContent(_activeTxKey, txObj);
+                                    }
+                                }
+
+                                if (isCompassLocked) {
+                                    updateCompassFromRotor();
+                                    redrawFiltered();
+                                } else if (document.getElementById('as-header-info')?.style.display === 'block') {
+                                    redrawFiltered();
+                                }
+                            }
+                        }
+                    }
+                }catch(e){
+                    debugLog('Error parsing WS message:', e);
+                } 
+            });
+            
+            ws.addEventListener('close',() => {
+                debugLog('DataPlugins WS closed. Reconnecting in 5s...');
+                setTimeout(setupDataPluginsWebSocket,5000);
+            });
+        }catch(e){
+            debugLog('Error setting up DataPlugins WS:', e);
+        }
     }
 
     function startCountdownTick(){
@@ -2025,7 +2397,7 @@
         }, COUNTDOWN_TICK_MS);
     }
 
-    // ── Data Fetching ───────────────────────────────────────────��─────────
+    // ── Data Fetching ────────────────────────────────────────────────────
     const DB_CACHE_KEY='as_fmdx_db', DB_CACHE_TS='as_fmdx_ts', DB_CACHE_LOC='as_fmdx_loc';
 
     function isFmdxCacheValid(currentLat, currentLon) {
@@ -2045,7 +2417,13 @@
 
     async function loadTxDatabase(lat, lon) {
         if (isFmdxCacheValid(lat, lon)) {
-            try { const raw = localStorage.getItem(DB_CACHE_KEY); if (raw) return JSON.parse(raw); } catch(e) {}
+            try { 
+                const raw = localStorage.getItem(DB_CACHE_KEY); 
+                if (raw) {
+                    await new Promise(r => setTimeout(r, 5)); // Short pause before the large JSON parse
+                    return JSON.parse(raw); 
+                }
+            } catch(e) {}
         }
         
         const directUrl = FMDX_API_BASE + '?qth=' + encodeURIComponent(lat + ',' + lon);
@@ -2063,28 +2441,43 @@
         const locs = data.locations || data;
         if (!locs || typeof locs !== 'object') throw new Error('Invalid TX DB format');
 
+        // Calculate bounding box limit (1 degree = approx. 111 km)
+        const latDelta = S.txRadiusKm / 111.0;
+        const lonDelta = S.txRadiusKm / Math.max(0.1, Math.abs(111.0 * Math.cos(lat * Math.PI / 180)));
+
         const stations = []; 
         const locIds = Object.keys(locs);
+        let lastYield = performance.now();
         
         for (let i = 0; i < locIds.length; i++) {
-            if (i > 0 && i % 100 === 0) {
-                await new Promise(r => setTimeout(r, 0)); 
+            // Time-based "breathing" instead of static counter
+            if (performance.now() - lastYield > 10) {
+                await new Promise(r => setTimeout(r, 5)); 
+                lastYield = performance.now();
             }
 
             const locId = locIds[i];
             const loc = locs[locId]; 
             if (!loc || !Array.isArray(loc.stations)) continue;
+            
             const locLat = parseFloat(loc.lat), locLon = parseFloat(loc.lon);
-            if (haversineKm(lat, lon, locLat, locLon) > S.txRadiusKm) continue;
+            
+            // SUPER-FAST pre-filter: Is the location roughly in the search rectangle?
+            if (Math.abs(locLat - lat) > latDelta || Math.abs(locLon - lon) > lonDelta) continue;
+            
+            // Only now calculate the exact (compute-intensive) circular distance
+            const dist = haversineKm(lat, lon, locLat, locLon);
+            if (dist > S.txRadiusKm) continue;
             
             loc.stations.forEach(st => {
                 const fMHz = parseFloat(st.freq), erp = parseFloat(st.erp);
                 if (fMHz < 87.5 || fMHz > 108.0 || isNaN(erp) || erp < S.minTxErpKw) return;
-                stations.push({ id: st.id, freq: fMHz, city: loc.name || '', itu: loc.itu || '', erp, lat: locLat, lon: locLon, dist: Math.round(haversineKm(lat, lon, locLat, locLon)), terrainM: 0, station: st.station||'', ps: st.ps||'', pol: st.pol||'' });
+                stations.push({ id: st.id, freq: fMHz, city: loc.name || '', itu: loc.itu || '', erp, lat: locLat, lon: locLon, dist: Math.round(dist), terrainM: 0, station: st.station||'', ps: st.ps||'', pol: st.pol||'' });
             });
         }
         
         try {
+            await new Promise(r => setTimeout(r, 5)); // Pause before saving in localStorage
             localStorage.setItem(DB_CACHE_KEY, JSON.stringify(stations)); 
             localStorage.setItem(DB_CACHE_TS, String(Date.now()));
             localStorage.setItem(DB_CACHE_LOC, JSON.stringify({lat, lon}));
@@ -2177,11 +2570,11 @@
         updateRxMarkerTooltip(rx);
 
         try {
-            txStations=await loadTxDatabase(rx.lat,rx.lon);
-            txStationGrid=buildTxGrid(txStations);
+            txStations = await loadTxDatabase(rx.lat, rx.lon);
+            txStationGrid = await buildTxGridAsync(txStations);
             updateRxMarkerTooltip(rx); 
-            enrichTxElevations(txStations).then(() => {
-                txStationGrid = buildTxGrid(txStations);
+            enrichTxElevations(txStations).then(async () => {
+                txStationGrid = await buildTxGridAsync(txStations);
                 if(mapInstance) redrawFiltered();
             });
         } catch(e) {
@@ -2240,7 +2633,7 @@
                         if (!mapActive) {
                             const rx = getRxCoords();
                             if (!rx) {
-                                alert("Airplane Scatter: Kein GPS-Signal oder QTH konfiguriert. Bitte warten oder in den Einstellungen eintragen.");
+                                alert("Airplane Scatter: No GPS signal or QTH configured. Please wait or enter it in the settings.");
                                 return;
                             }
                             mapActive = true;
@@ -2264,6 +2657,7 @@
         ensureLeaflet(()=>{
             startUpdate(false);
             setupMainWebSocket();
+            setupRdsWebSocket();
             if(aircraftTimer)clearInterval(aircraftTimer);
             aircraftTimer=setInterval(()=>{if(mapActive)startUpdate(false);},AIRCRAFT_UPDATE_MS);
             startCountdownTick();
@@ -2276,7 +2670,7 @@
         ituToFlag = {};
     });
 
-    setupGpsWebSocket();
+    setupDataPluginsWebSocket(); // Setup websocket for GPS and Rotor
     createButton();
 
 })();

@@ -4,20 +4,16 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 <img width="1000" height="420" alt="grafik" src="https://github.com/user-attachments/assets/5c61c219-b5dc-47a8-807b-5eef553af9d4" />
 <img width="1000" height="420" alt="grafik" src="https://github.com/user-attachments/assets/abd79278-9805-42f8-9efd-1b92d92d5178" />
 
+## Version 1.1
 
-
-## Version 1.0
-
-- Real-time scatter prediction – Continuously evaluates all aircraft against all FM transmitters and predicts scatter events up to 3 minutes in advance with a live ETA countdown.
-- Multi-factor scatter score (0–100%) – Weighted composite of cross-track distance, reflection geometry, aircraft altitude, fuselage alignment, transmitter ERP, and FM frequency — scaled by aircraft size category.
-- Interactive Leaflet map – Draggable, resizable floating panel with aircraft icons, TX dots, dashed scatter path lines, compass filter, and frequency filter; all colour-coded by score.
-- Topographic elevation profile – Interactive RX→TX terrain cross-section with LOS ceiling curves, scatter zone (purple), and live aircraft dot positions; zoomable and pannable.
-- Persistent crossing tracker – Once a candidate is detected it stays visible through approach, peak (NOW ✓), and recession, smoothly updated by dead reckoning between 15-second ADS-B fetches.
-- TX database integration – Loads all FM transmitters within 750 km radius (≥ 100 kW ERP) from maps.fmdx.org with 24-hour local cache and automatic invalidation on location drift.
-- ADS-B triple-source failover – Queries adsb.one → adsb.lol → adsb.fi automatically; remembers the last working source and uses it preferentially on the next cycle.
-- One-click receiver tuning – Clicking any frequency in the TX detail panel sends a tune command over the FM-DX-Webserver WebSocket, instantly retuning the receiver to the target frequency.
-- GPS WebSocket integration – Receives live GPS position from the FM-DX-Webserver data feed; falls back gracefully to manually configured QTH coordinates.
-- Compass & frequency filters – Eight-direction compass rose restricts candidates to a 45° bearing sector; frequency input simultaneously filters the map and tunes the receiver.
+- PST Rotator Integration: Live rotor azimuth tracking via WebSocket
+- Auto-Sync Locks: New buttons (🔓/🔒) to automatically lock filters to your physical antenna heading and active radio frequency
+- Click-to-Turn Rotor: Click a station's azimuth in the details panel to automatically turn your rotor (requires Admin/Tune)
+- Multi-Select Compass: You can now click multiple compass directions simultaneously to combine filters
+- Smart Sector Tracking: When locked to the rotor, the compass automatically filters both adjacent sectors if the antenna points between them
+- Persistent Filters: Opening a station's elevation profile no longer resets your active background filters
+- Smart Clear Button: Clicking the "Filtered by..." status text now smartly closes either just the active station view, or clears all filters if no station is open
+- Anti-Stutter Optimization: Massive CPU improvements (bounding-box pre-filtering & CPU yielding) prevent browser lockups and audio stuttering on low-end hardware (e.g., Linux SBCs)
 
 ## Installation notes:
 
@@ -43,5 +39,17 @@ If you have any questions, would like to report problems, or have suggestions fo
 <details>
 <summary>History</summary>
 
+### Version 1.0
+
+- Real-time scatter prediction – Continuously evaluates all aircraft against all FM transmitters and predicts scatter events up to 3 minutes in advance with a live ETA countdown
+- Multi-factor scatter score (0–100%) – Weighted composite of cross-track distance, reflection geometry, aircraft altitude, fuselage alignment, transmitter ERP, and FM frequency — scaled by aircraft size category
+- Interactive Leaflet map – Draggable, resizable floating panel with aircraft icons, TX dots, dashed scatter path lines, compass filter, and frequency filter; all colour-coded by score
+- Topographic elevation profile – Interactive RX→TX terrain cross-section with LOS ceiling curves, scatter zone (purple), and live aircraft dot positions; zoomable and pannable
+- Persistent crossing tracker – Once a candidate is detected it stays visible through approach, peak (NOW ✓), and recession, smoothly updated by dead reckoning between 15-second ADS-B fetches
+- TX database integration – Loads all FM transmitters within 750 km radius (≥ 100 kW ERP) from maps.fmdx.org with 24-hour local cache and automatic invalidation on location drift
+- ADS-B triple-source failover – Queries adsb.one → adsb.lol → adsb.fi automatically; remembers the last working source and uses it preferentially on the next cycle
+- One-click receiver tuning – Clicking any frequency in the TX detail panel sends a tune command over the FM-DX-Webserver WebSocket, instantly retuning the receiver to the target frequency
+- GPS WebSocket integration – Receives live GPS position from the FM-DX-Webserver data feed; falls back gracefully to manually configured QTH coordinates
+- Compass & frequency filters – Eight-direction compass rose restricts candidates to a 45° bearing sector; frequency input simultaneously filters the map and tunes the receiver
 
 
