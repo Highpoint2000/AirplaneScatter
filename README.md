@@ -28,7 +28,8 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 
 ## How to use:     
                                          
-- Please refer to the documentation: https://highpoint.fmdx.org/manuals/AirplaneScatter-Documentation.html
+- Please read the Quick Reference Document
+- For more details - please refer to the documentation: https://highpoint.fmdx.org/manuals/AirplaneScatter-Documentation.html
 - Here's a demo video showcasing the plugin's functionalities: https://highpoint.fmdx.org/videos/AirplaneScatter-Demo.mp4
 - For equalizing/denoising the audio signals in scatter mode, the use of the AI ​​Denoiser is recommended: https://github.com/Highpoint2000/AI-Denoise
 - To decode RDS as quickly as possible during short-term receptions, the use of the RDS AI decoder is recommended: https://github.com/Highpoint2000/RDS-AI-Decoder
