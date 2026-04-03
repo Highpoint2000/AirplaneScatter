@@ -392,12 +392,12 @@ function meetsAcTypeFilter(ac) {
                 return new Set();
             }
             const text = await res.text();
-            const freqs = text.split('\n')
-                .map(l => l.trim().replace(',', '.'))
-                .filter(l => l !== '')
-                .map(l => parseFloat(l))
-                .filter(f => !isNaN(f));
-            return new Set(freqs.map(f => Math.round(f * 100)));
+			const freqs = text.split('\n')
+				.map(l => l.trim().replace(',', '.').replace(/\s.*$/, ''))
+				.filter(l => l !== '' && !l.startsWith('#'))                 
+				.map(l => parseFloat(l))
+				.filter(f => !isNaN(f) && f >= 87.5 && f <= 108.0);       
+			return new Set(freqs.map(f => Math.round(f * 100)));
         } catch(e) {
             console.warn(`[Airplane Scatter] Failed to fetch ${fileName}:`, e);
             return new Set();
@@ -900,24 +900,23 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
                 const tx = nearby[j];
                 const txKey = tx.lat+'_'+tx.lon+'_'+tx.freq;
 				
-// Remove existing crossing if aircraft no longer meets filter
-if (!meetsAcTypeFilter(ac)) {
-    delete _persistentCrossings[ac.icao24];
-    continue;
-}
+			if (!meetsAcTypeFilter(ac)) {
+				delete _persistentCrossings[ac.icao24];
+				continue;
+			}
 
                 const r = calcScatter(ac, rxLat, rxLon, _rxElevM, tx);
 
-                if (r) {
-                    if (crossings[txKey]) {
-                        crossings[txKey].etaSec   = r.etaSec;
-                        crossings[txKey].ac        = ac;
-                        crossings[txKey].score     = r.score;
-                        crossings[txKey].calcTime  = currentCalcTime;
-                    } else if (r.score >= S.minScore) {
-                        crossings[txKey] = { tx, ac, etaSec: r.etaSec, score: r.score, calcTime: currentCalcTime };
-                    }
-                }
+				if (r && r.score >= S.minScore) {
+					if (crossings[txKey]) {
+						crossings[txKey].etaSec   = r.etaSec;
+						crossings[txKey].ac        = ac;
+						crossings[txKey].score     = r.score;
+						crossings[txKey].calcTime  = currentCalcTime;
+					} else {
+						crossings[txKey] = { tx, ac, etaSec: r.etaSec, score: r.score, calcTime: currentCalcTime };
+					}
+				}
             }
 
             for (let tK in crossings) {
@@ -1717,8 +1716,9 @@ if (!meetsAcTypeFilter(ac)) {
         const allCrs = getActiveVisibleCrossings().filter(c => (c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq) === txKey);
         allCrs.sort((a,b) => Math.abs(a.liveEta) - Math.abs(b.liveEta));
 
-        if (!bd.dataset.txKey || bd.dataset.txKey !== txKey) {
-            bd.dataset.txKey = txKey;
+		if (!bd.dataset.txKey || bd.dataset.txKey !== txKey || bd.dataset.filterMode !== S.filterMode) {
+			bd.dataset.txKey = txKey;
+			bd.dataset.filterMode = S.filterMode;
 
             const siblings = txSiblings(tx);
             const progsRows = siblings.map(t => {
@@ -2079,12 +2079,16 @@ if (!meetsAcTypeFilter(ac)) {
             localStorage.setItem('as_min_score',        v('as-s-score'));
             localStorage.setItem('as_rx_agl',           v('as-s-rxagl'));
 
-            S = loadSettings();
-            _rxElevM = _rxTerrainM + S.rxAglM;
-            panel.style.display = 'none';
-            _persistentCrossings = {};
-            const detailBody = document.getElementById('as-tx-detail-body');
-            if (detailBody) detailBody.dataset.txKey = '';
+S = loadSettings();
+_rxElevM = _rxTerrainM + S.rxAglM;
+panel.style.display = 'none';
+_persistentCrossings = {};
+const detailBody = document.getElementById('as-tx-detail-body');
+if (detailBody) { detailBody.dataset.txKey = ''; detailBody.dataset.filterMode = ''; }
+
+if (_activeTxKey || _activeProfileTxKey) {
+    hideTxDetails();
+}
 
             if (radiusChanged) {
                 localStorage.removeItem(DB_CACHE_KEY);
@@ -2830,15 +2834,19 @@ if (!meetsAcTypeFilter(ac)) {
         try {
             txStations = await loadTxDatabase(rx.lat, rx.lon);
 
-            const freqFilterList = await fetchFrequencyList(S.filterMode);
-            if (S.filterMode !== 'none' && freqFilterList.size > 0) {
-                txStations = txStations.filter(tx => {
-                    const txFreqRounded = Math.round(tx.freq * 100);
-                    if (S.filterMode === 'whitelist') return  freqFilterList.has(txFreqRounded);
-                    if (S.filterMode === 'blacklist') return !freqFilterList.has(txFreqRounded);
-                    return true;
-                });
-            }
+			const freqFilterList = await fetchFrequencyList(S.filterMode);
+			if (S.filterMode !== 'none') {
+				if (freqFilterList.size === 0 && S.filterMode === 'whitelist') {
+					console.warn('[Airplane Scatter] Whitelist is empty or failed to load – showing all stations.');
+				} else if (freqFilterList.size > 0) {
+					txStations = txStations.filter(tx => {
+						const txFreqRounded = Math.round(tx.freq * 100);
+						if (S.filterMode === 'whitelist') return  freqFilterList.has(txFreqRounded);
+						if (S.filterMode === 'blacklist') return !freqFilterList.has(txFreqRounded);
+						return true;
+					});
+				}
+			}
 
             txStationGrid = await buildTxGridAsync(txStations);
             updateRxMarkerTooltip(rx);
