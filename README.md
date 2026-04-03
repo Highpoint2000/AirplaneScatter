@@ -1,10 +1,13 @@
 # Airplane Scatter
 Predicts and visualizes real-time airplane scatter opportunities for FM radio reception by combining live ADS-B flight tracking with transmitter databases and elevation profiles.
 
-<img width="1000" height="420" alt="grafik" src="https://github.com/user-attachments/assets/5c61c219-b5dc-47a8-807b-5eef553af9d4" />
-<img width="1000" height="420" alt="grafik" src="https://github.com/user-attachments/assets/abd79278-9805-42f8-9efd-1b92d92d5178" />
+<img width="2000" height="836" alt="grafik" src="https://github.com/user-attachments/assets/72607b3a-b034-40a6-ae90-551c11e016bd" />
+<img width="500" height="460" alt="grafik" src="https://github.com/user-attachments/assets/48c731e7-f2ab-442f-a9d1-4b32bcc5572c" />
+<img width="322" height="4460" alt="grafik" src="https://github.com/user-attachments/assets/59e1bb3d-b202-4b7d-958d-3106a321d547" />
 
-## Version 2.0
+
+
+## Version 2.0 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 
 - Local Node Proxy Server (airplanescatter_server.js) — replaces the unreliable public CORS proxy with a dedicated backend that runs inside FM-DX-Webserver
 - Audio Stream Integration — Play/Stop buttons in the TX detail panel stream live web radio directly in the browser 
@@ -13,7 +16,7 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 - The fetch radius (TX & aircraft) is extended to up to 1000 km
 - The purple coverage area between RX and TX is now also displayed in the map line
 
-## Installation notes:
+## Installation notes
 
 1. [Download](https://github.com/Highpoint2000/AirplaneScatter/releases) the last repository as a zip
 2. Unpack all files from the folder to ..fm-dx-webserver-main\plugins\ 
@@ -24,13 +27,17 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 7. Start/Restart the fm-dx-webserver with "npm run webserver" on node.js console, check the console informations 
 8. Reload the browser
 
-## How to use:     
+## How to use
                                          
 - Please read the Quick Reference Document
 - For more details - please refer to the documentation: https://highpoint.fmdx.org/manuals/AirplaneScatter-Documentation.html
 - Here's a demo video showcasing the plugin's functionalities: https://highpoint.fmdx.org/videos/AirplaneScatter-Demo.mp4
 - For equalizing/denoising the audio signals in scatter mode, the use of the AI ​​Denoiser is recommended: https://github.com/Highpoint2000/AI-Denoise
 - To decode RDS as quickly as possible during short-term receptions, the use of the RDS AI decoder is recommended: https://github.com/Highpoint2000/RDS-AI-Decoder
+
+## Blacklist and Whitelist Options
+
+To exclude locally used frequencies, the plugin offers a blacklist and whitelist function. The required TXT files must be located in the plugin folder (sample files are included in the current plugin package). In the "whitelist.txt" file, you can store frequencies (e.g., 89.800, 89.400, 100.80) that should be considered exclusively during processing. In the "blacklist.txt" file, you define frequencies that should be excluded from processing. You can configure which filter list should be active in the plugin settings.
 
 ## Contact
 
