@@ -4,16 +4,14 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 <img width="1000" height="420" alt="grafik" src="https://github.com/user-attachments/assets/5c61c219-b5dc-47a8-807b-5eef553af9d4" />
 <img width="1000" height="420" alt="grafik" src="https://github.com/user-attachments/assets/abd79278-9805-42f8-9efd-1b92d92d5178" />
 
-## Version 1.1
+## Version 2.0
 
-- PST Rotator Integration: Live rotor azimuth tracking via WebSocket
-- Auto-Sync Locks: New buttons (🔓/🔒) to automatically lock filters to your physical antenna heading and active radio frequency
-- Click-to-Turn Rotor: Click a station's azimuth in the details panel to automatically turn your rotor (requires Admin/Tune)
-- Multi-Select Compass: You can now click multiple compass directions simultaneously to combine filters
-- Smart Sector Tracking: When locked to the rotor, the compass automatically filters both adjacent sectors if the antenna points between them
-- Persistent Filters: Opening a station's elevation profile no longer resets your active background filters
-- Smart Clear Button: Clicking the "Filtered by..." status text now smartly closes either just the active station view, or clears all filters if no station is open
-- Anti-Stutter Optimization: Massive CPU improvements (bounding-box pre-filtering & CPU yielding) prevent browser lockups and audio stuttering on low-end hardware (e.g., Linux SBCs)
+- Local Node Proxy Server (airplanescatter_server.js) — replaces the unreliable public CORS proxy with a dedicated backend that runs inside FM-DX-Webserver
+- Audio Stream Integration — Play/Stop buttons in the TX detail panel stream live web radio directly in the browser 
+- Aircraft Category Filter — new setting to exclude smaller aircraft objects 
+- Frequency Blacklist / Whitelist — static blacklist.txt / whitelist.txt files can be loaded to suppress or exclusively show specific frequencies
+- The fetch radius (TX & aircraft) is extended to up to 1000 km
+- The purple coverage area between RX and TX is now also displayed in the map line
 
 ## Installation notes:
 
@@ -34,7 +32,6 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 - For equalizing/denoising the audio signals in scatter mode, the use of the AI ​​Denoiser is recommended: https://github.com/Highpoint2000/AI-Denoise
 - To decode RDS as quickly as possible during short-term receptions, the use of the RDS AI decoder is recommended: https://github.com/Highpoint2000/RDS-AI-Decoder
 
-
 ## Contact
 
 If you have any questions, would like to report problems, or have suggestions for improvement, please feel free to contact me! You can reach me by email at highpoint2000@googlemail.com. I look forward to hearing from you!
@@ -43,6 +40,17 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### Version 1.1
+
+- PST Rotator Integration: Live rotor azimuth tracking via WebSocket
+- Auto-Sync Locks: New buttons (🔓/🔒) to automatically lock filters to your physical antenna heading and active radio frequency
+- Click-to-Turn Rotor: Click a station's azimuth in the details panel to automatically turn your rotor (requires Admin/Tune)
+- Multi-Select Compass: You can now click multiple compass directions simultaneously to combine filters
+- Smart Sector Tracking: When locked to the rotor, the compass automatically filters both adjacent sectors if the antenna points between them
+- Persistent Filters: Opening a station's elevation profile no longer resets your active background filters
+- Smart Clear Button: Clicking the "Filtered by..." status text now smartly closes either just the active station view, or clears all filters if no station is open
+- Anti-Stutter Optimization: Massive CPU improvements (bounding-box pre-filtering & CPU yielding) prevent browser lockups and audio stuttering on low-end hardware (e.g., Linux SBCs)
 
 ### Version 1.0
 
