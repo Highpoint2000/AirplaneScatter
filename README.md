@@ -6,7 +6,7 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 
 ## Version 2.0
 
-- Local Node Proxy Server (airplanescatter_server.js) — replaces the unreliable public CORS proxy (cors-proxy.de) with a dedicated backend that runs inside FM-DX-Webserver
+- Local Node Proxy Server (airplanescatter_server.js) — replaces the unreliable public CORS proxy with a dedicated backend that runs inside FM-DX-Webserver
 - Audio Stream Integration — Play/Stop buttons in the TX detail panel stream live web radio directly in the browser 
 - Aircraft Category Filter — new setting to exclude smaller aircraft objects 
 - Frequency Blacklist / Whitelist — static blacklist.txt / whitelist.txt files can be loaded to suppress or exclusively show specific frequencies
