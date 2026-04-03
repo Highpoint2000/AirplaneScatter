@@ -1,17 +1,17 @@
-///////////////////////////////////////////////////////////////
-//                                                           //
-//  AIRPLANE SCATTER PLUGIN FOR FM-DX-WEBSERVER (V1.1)       //
-//                                                           //
-//  by Highpoint                last update: 2026-04-02      //
-//                                                           //
-//  https://github.com/Highpoint2000/RDS-AI-Decoder          //
-//                                                           //
-///////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+//                                                            //
+//  AIRPLANE SCATTER CLIENT PLUGIN FOR FM-DX-WEBSERVER (V2.0) //
+//                                                            //
+//  by Highpoint                last update: 2026-04-03       //
+//                                                            //
+//  https://github.com/Highpoint2000/AirplaneScatter          //
+//                                                            //
+////////////////////////////////////////////////////////////////
 
 (() => {
 
     // ── Plugin metadata & Update Check ────────────────────────────────────
-    const pluginVersion     = "1.1";
+    const pluginVersion     = "2.0";
     const pluginName        = "Airplane Scatter";
     const pluginHomepageUrl = "https://github.com/highpoint2000/AirplaneScatter/releases";
     const pluginUpdateUrl   = "https://raw.githubusercontent.com/Highpoint2000/AirplaneScatter/refs/heads/main/AirplaneScatter/airplanescatter.js";
@@ -28,13 +28,11 @@
                 if (remote === pluginVersion) return;
                 console.log(`[${pluginName}] Update available: ${pluginVersion} → ${remote}`);
 
-                // Inject link into #plugin-settings
                 const settings = document.getElementById("plugin-settings");
                 if (settings && settings.innerHTML.indexOf(pluginHomepageUrl) === -1) {
                     settings.innerHTML += `<br><a href='${pluginHomepageUrl}' target='_blank'>[${pluginName}] Update: ${pluginVersion} → ${remote}</a>`;
                 }
 
-                // Inject red dot on the nav puzzle-piece icon
                 const icon =
                     document.querySelector(".wrapper-outer #navigation .sidenav-content .fa-plane")?.closest('a') ||
                     document.querySelector(".wrapper-outer #navigation .sidenav-content .fa-puzzle-piece")?.closest('a') ||
@@ -55,13 +53,21 @@
     }
     if (CHECK_FOR_UPDATES) _checkUpdate();
 
-    // ── Configuration ──────────────────────────────────────────────────────
-    const corsAnywhereUrl        = 'https://cors-proxy.de:13128/';
+    // ── Configuration ──────────────────────────────────────────────────────────
+    const currentUrlForProxy = new URL(window.location.href);
+    const baseProxyPath = currentUrlForProxy.origin
+        + currentUrlForProxy.pathname.replace(/\/setup\/?$/, '/').replace(/\/$/, '')
+        + '/api/airplanescatter/proxy?url=';
+
+    function proxyUrl(targetUrl) {
+        return baseProxyPath + encodeURIComponent(targetUrl);
+    }
+
     const FMDX_API_BASE          = 'https://maps.fmdx.org/api/';
-    const ELEVATION_API          = corsAnywhereUrl + 'https://api.opentopodata.org/v1/srtm90m?locations='; 
+    const ELEVATION_API          = 'https://api.opentopodata.org/v1/srtm90m?locations=';
 
     const FORECAST_STEPS_SEC     = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300];
-    const AIRCRAFT_TIMEOUT_MS    = 180000; 
+    const AIRCRAFT_TIMEOUT_MS    = 180000;
 
     const AIRCRAFT_UPDATE_MS     = 15000;
     const COUNTDOWN_TICK_MS      = 1000;
@@ -122,15 +128,32 @@
             minTxErpKw      : getInt(localStorage.getItem('as_min_erp'), 100),
             txRadiusKm      : getInt(localStorage.getItem('as_tx_radius'), 750),
             aircraftRadiusKm: getInt(localStorage.getItem('as_ac_radius'), 750),
-            minScore        : getInt(localStorage.getItem('as_min_score'), 75),
+            minScore        : getInt(localStorage.getItem('as_min_score'), 70),
             rxAglM          : getInt(localStorage.getItem('as_rx_agl'), 10),
             useMetric       : localStorage.getItem('as_use_metric') !== 'false',
             leadTimeSec     : parseTimeStr(localStorage.getItem('as_lead_time_str'), 180),
-            trailTimeSec    : parseTimeStr(localStorage.getItem('as_trail_time_str'), 60)
+            trailTimeSec    : parseTimeStr(localStorage.getItem('as_trail_time_str'), 60),
+            filterMode      : localStorage.getItem('as_filter_mode') || 'none',
+            acTypeFilter    : localStorage.getItem('as_ac_type_filter') || 'all',
         };
     }
     let S = loadSettings();
-	
+
+    // ── Aircraft category filter ───────────────────────────────────────────
+function meetsAcTypeFilter(ac) {
+    if (!S.acTypeFilter || S.acTypeFilter === 'all') return true;
+    if (!ac.category) return false;
+    const cat = ac.category.toString().toUpperCase().trim();
+    // Extract numeric part: A1→1, A2→2, ... A5→5
+    const match = cat.match(/^A(\d)$/);
+    if (!match) return false;
+    const acNum = parseInt(match[1], 10);
+    // Filter setting is the minimum category (e.g. 'A3' means A3, A4, A5+)
+    const filterMatch = S.acTypeFilter.match(/^A(\d)$/);
+    if (!filterMatch) return false;
+    const minNum = parseInt(filterMatch[1], 10);
+    return acNum >= minNum;
+}
 
     let isAdminLoggedIn = false;
     let isTuneLoggedIn = false;
@@ -161,19 +184,19 @@
     function fmtAlt(ft) { return S.useMetric ? Math.round(ft * 0.3048) + ' m' : Math.round(ft) + ' ft'; }
     function fmtSpeed(kts) { return S.useMetric ? Math.round(kts * 1.852) + ' km/h' : Math.round(kts) + ' kts'; }
     function fmtVspeed(ftmin) {
-        if(ftmin === null || ftmin === undefined) return '—';
-        if(S.useMetric) return (ftmin > 0 ? '↑ ' : '↓ ') + Math.abs((ftmin * 0.00508).toFixed(1)) + ' m/s';
+        if (ftmin === null || ftmin === undefined) return '—';
+        if (S.useMetric) return (ftmin > 0 ? '↑ ' : '↓ ') + Math.abs((ftmin * 0.00508).toFixed(1)) + ' m/s';
         return (ftmin > 0 ? '↑ ' : '↓ ') + Math.abs(Math.round(ftmin)) + ' ft/min';
     }
-    
+
     function parseFreq(valStr) {
         let s = valStr.replace(',', '.').trim();
-        if(!s) return null;
+        if (!s) return null;
         let v = parseFloat(s);
-        if(isNaN(v)) return null;
-        if(v > 8700) v = v / 100;
-        else if(v >= 870 && v <= 1080) v = v / 10;
-        if(v >= 87.5 && v <= 108.0) return v;
+        if (isNaN(v)) return null;
+        if (v > 8700) v = v / 100;
+        else if (v >= 870 && v <= 1080) v = v / 10;
+        if (v >= 87.5 && v <= 108.0) return v;
         return null;
     }
 
@@ -184,7 +207,7 @@
     const COUNTRY_CACHE_TTL      = 24 * 60 * 60 * 1000; // 24 hours
 
     let ituToFlag = null;
-	const _flagHtmlCache = {};
+    const _flagHtmlCache = {};
 
     async function loadCountryLookup() {
         try {
@@ -232,11 +255,12 @@
         _flagHtmlCache[key] = html;
         return html;
     }
+
     // ── Elevation caches ──────────────────────────────────────────────────
     const ELEV_CACHE_KEY = 'as_elev_cache';
     let _elevCache = {};
-    let _pathElevCache = {}; 
-    let _currentPathElevs = null; 
+    let _pathElevCache = {};
+    let _currentPathElevs = null;
 
     try {
         const stored = localStorage.getItem(ELEV_CACHE_KEY);
@@ -247,12 +271,13 @@
         try { localStorage.setItem(ELEV_CACHE_KEY, JSON.stringify(_elevCache)); } catch(e) {}
     }
 
-    let _rxTerrainM  = 0;    
-    let _rxElevM     = S.rxAglM; 
-	
+    let _rxTerrainM  = 0;
+    let _rxElevM     = S.rxAglM;
+
     async function fetchOpenElevation(lat, lon) {
         const key = lat.toFixed(4) + '_' + lon.toFixed(4);
-        const url = corsAnywhereUrl + 'https://api.open-elevation.com/api/v1/lookup?locations=' + lat.toFixed(4) + ',' + lon.toFixed(4);
+        const targetUrl = 'https://api.open-elevation.com/api/v1/lookup?locations=' + lat.toFixed(4) + ',' + lon.toFixed(4);
+        const url = proxyUrl(targetUrl);
         try {
             const r = await fetch(url);
             if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -260,7 +285,7 @@
             const height = j.results && j.results[0] && typeof j.results[0].elevation === 'number' ? Math.max(0, j.results[0].elevation) : 0;
             _elevCache[key] = height;
         } catch (e) {
-            _elevCache[key] = 0; 
+            _elevCache[key] = 0;
         }
     }
 
@@ -269,7 +294,7 @@
         const locs = points.map(p => p.lat.toFixed(4) + ',' + p.lon.toFixed(4)).join('|');
         let done = {};
         try {
-            const r = await fetch(ELEVATION_API + locs);
+            const r = await fetch(proxyUrl(ELEVATION_API + locs));
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const j = await r.json();
             (j.results || []).forEach((res, idx) => {
@@ -298,13 +323,13 @@
         const unique = [], seen = new Set();
         stations.forEach(tx => {
             const k = tx.lat.toFixed(4) + '_' + tx.lon.toFixed(4);
-            if (_elevCache[k] === undefined && !seen.has(k)) { 
-                seen.add(k); unique.push({lat: tx.lat, lon: tx.lon, key: k}); 
+            if (_elevCache[k] === undefined && !seen.has(k)) {
+                seen.add(k); unique.push({lat: tx.lat, lon: tx.lon, key: k});
             }
         });
         if (unique.length > 0) {
             for (let i = 0; i < unique.length; i += 100) await fetchElevationBatch(unique.slice(i, i + 100));
-            saveElevCache(); 
+            saveElevCache();
         }
         stations.forEach(tx => {
             const k = tx.lat.toFixed(4) + '_' + tx.lon.toFixed(4);
@@ -319,14 +344,63 @@
         const pts = generatePathPoints(rxLat, rxLon, txLat, txLon, 100);
         const locs = pts.map(p => p.lat.toFixed(4) + ',' + p.lon.toFixed(4)).join('|');
         try {
-            const r = await fetch(ELEVATION_API + locs);
-            if(!r.ok) throw new Error('HTTP ' + r.status);
+            const r = await fetch(proxyUrl(ELEVATION_API + locs));
+            if (!r.ok) throw new Error('HTTP ' + r.status);
             const j = await r.json();
             const elevs = (j.results || []).map(res => Math.max(0, res.elevation || 0));
             _pathElevCache[cacheKey] = elevs;
             return elevs;
         } catch(e) {
-            return pts.map(() => 0); 
+            return pts.map(() => 0);
+        }
+    }
+
+    // ── Custom Aircraft Categorization ─────────────────────────────────────
+    const HEAVY_AIRCRAFT = [
+        "A332", "A333", "A338", "A339", "A342", "A343", "A345", "A346", 
+        "A359", "A35K", "B744", "B748", "B763", "B764", "B772", "B773", 
+        "B77L", "B77W", "B788", "B789", "B78X", "MD11", "DC10"
+    ];
+    
+    const MEDIUM_AIRCRAFT = [
+        "A20N", "A21N", "A318", "A319", "A320", "A321", "B737", "B738", 
+        "B739", "B38M", "B39M", "E170", "E175", "E190", "E195", "BCS1", 
+        "BCS3", "CRJ2", "CRJ7", "CRJ9", "CRJX"
+    ];
+
+    function getCustomCategory(type) {
+        if (!type) return "A1"; // Unknown / Light
+        const t = type.toUpperCase();
+        
+        if (t === "A388" || t === "A225") return "A5"; // Super Heavy
+        if (HEAVY_AIRCRAFT.includes(t)) return "A4";   // Heavy
+        if (MEDIUM_AIRCRAFT.includes(t)) return "A3";  // Large / Medium
+        
+        return "A2"; // Small (Fallback for other identified types)
+    }
+
+    // ── Frequency Filter Lists ───────────────────────────────────────────
+    async function fetchFrequencyList(mode) {
+        if (mode === 'none') return new Set();
+        const fileName = mode === 'blacklist' ? 'blacklist.txt' : 'whitelist.txt';
+        const url = `${currentURL.protocol}//${currentURL.host}/plugins/AirplaneScatter/${fileName}?t=${Date.now()}`;
+
+        try {
+            const res = await fetch(url);
+            if (!res.ok) {
+                console.warn(`[Airplane Scatter] ${fileName} not found or inaccessible (HTTP ${res.status}).`);
+                return new Set();
+            }
+            const text = await res.text();
+            const freqs = text.split('\n')
+                .map(l => l.trim().replace(',', '.'))
+                .filter(l => l !== '')
+                .map(l => parseFloat(l))
+                .filter(f => !isNaN(f));
+            return new Set(freqs.map(f => Math.round(f * 100)));
+        } catch(e) {
+            console.warn(`[Airplane Scatter] Failed to fetch ${fileName}:`, e);
+            return new Set();
         }
     }
 
@@ -346,28 +420,25 @@
     let rxMarker             = null;
     let _lastFetchTime       = 0;
     let _drMarkers           = {};
-    let _txElements          = {}; 
-    let ws                   = null;       // Data plugins WS
-    let mainWebsocket        = null;       // Main Radio WS
-    let rdsWebsocket         = null;       // Radio text WS for freq updates
+    let _txElements          = {};
+    let ws                   = null;
+    let mainWebsocket        = null;
+    let rdsWebsocket         = null;
     let gpsLat               = null;
     let gpsLon               = null;
-    
-    // Robust Tracking & Grouping
+
     let _activeAircraft      = {};
     let _persistentCrossings = {};
 
-    let _activeTxKey         = null;   
+    let _activeTxKey         = null;
     let _activeCompass       = null;
-    let _activeFreq          = null; 
-    let isFreqLocked         = false; // Track if filter is locked to radio
-    let isCompassLocked      = false; // Track if compass filter is locked to rotor
-    let lastRotorAzimuth     = null;  // Store last received rotor position
+    let _activeFreq          = null;
+    let isFreqLocked         = false;
+    let isCompassLocked      = false;
+    let lastRotorAzimuth     = null;
 
-    // Generate unique client ID for PSTRotator compatibility
     const clientId = Math.random().toString(36).substring(2);
 
-    // Profile State
     let _activeProfileTxKey  = null;
     let _activeProfileTxObj  = null;
     let _currentProfileDist  = 0;
@@ -375,7 +446,7 @@
     let profMaxX = 0;
     let isDraggingProf = false;
     let lastMouseX = 0;
-	let profScaleY = 1.0;
+    let profScaleY = 1.0;
 
     const currentURL    = new URL(window.location.href);
     const WebserverURL  = currentURL.hostname;
@@ -385,11 +456,10 @@
     const WEBSOCKET_URL = `${protocol}//${WebserverURL}:${WebserverPORT}${WebserverPath}data_plugins`;
     const TEXT_WS_URL   = `${protocol}//${WebserverURL}:${WebserverPORT}${WebserverPath}text`;
 
-    // ── CSS ───────────────────────────────────────────────────────────────
     const style = document.createElement('style');
     style.innerHTML = `
         #as-wrapper{position:fixed;z-index:9000;display:flex;flex-direction:row;pointer-events:none;}
-        #as-list-panel{pointer-events:all;width:250px;min-width:200px;background:#0d1420;border-right:1px solid #1e3050;display:flex;flex-direction:column;overflow:hidden;border-radius:12px 0 0 0;box-shadow:-2px 4px 24px rgba(0,0,0,0.7);flex-shrink:0;}
+        #as-list-panel{pointer-events:all;width:290px;min-width:200px;background:#0d1420;border-right:1px solid #1e3050;display:flex;flex-direction:column;overflow:hidden;border-radius:12px 0 0 0;box-shadow:-2px 4px 24px rgba(0,0,0,0.7);flex-shrink:0;}
         #as-list-header{background:var(--color-2,#162032);color:#4aaeff;font-size:12px;font-weight:bold;padding:8px 10px 6px;border-bottom:1px solid #1e3050;flex-shrink:0; display:flex; justify-content:space-between; align-items:center;}
         #as-list-body{flex:1;overflow-y:auto;padding:4px 0;}
         #as-list-body::-webkit-scrollbar{width:4px;}
@@ -403,23 +473,23 @@
         .as-li-eta{font-size:13px;font-weight:bold;}
         .as-li-score{font-size:11px;font-weight:bold;}
         .as-list-approaching{opacity:0.6;}
-        
+
         .as-sub-header {
-            display: flex !important; flex-wrap: nowrap !important; align-items: center !important; 
-            padding: 7px 14px !important; background: var(--color-2, #162032) !important; 
+            display: flex !important; flex-wrap: nowrap !important; align-items: center !important;
+            padding: 7px 14px !important; background: var(--color-2, #162032) !important;
             border-bottom: 1px solid #1e3050 !important;
-            min-height: 38px !important; flex-shrink: 0 !important; box-sizing: border-box !important; 
+            min-height: 38px !important; flex-shrink: 0 !important; box-sizing: border-box !important;
             width: 100% !important;
         }
-        .as-sub-title { 
-            font-size: 13px !important; font-weight: bold !important; color: #4aaeff !important; 
-            white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; 
+        .as-sub-title {
+            font-size: 13px !important; font-weight: bold !important; color: #4aaeff !important;
+            white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important;
             flex: 1 1 auto !important; margin: 0 !important; padding: 0 !important; text-align: left !important;
         }
-        .as-sub-close { 
-            background: transparent !important; border: none !important; color: #fff !important; 
-            font-size: 20px !important; cursor: pointer !important; padding: 0 4px !important; 
-            line-height: 1 !important; margin: 0 0 0 15px !important; 
+        .as-sub-close {
+            background: transparent !important; border: none !important; color: #fff !important;
+            font-size: 20px !important; cursor: pointer !important; padding: 0 4px !important;
+            line-height: 1 !important; margin: 0 0 0 15px !important;
             flex: 0 0 auto !important; width: auto !important; min-width: unset !important; max-width: unset !important;
         }
         .as-sub-close:hover { color: #f66 !important; }
@@ -428,7 +498,7 @@
         #as-tx-detail-body{flex:1; overflow-y:auto; padding:10px;}
         #as-tx-detail-body::-webkit-scrollbar{width:4px;}
         #as-tx-detail-body::-webkit-scrollbar-thumb{background:#2a4a7a;border-radius:2px;}
-        
+
         .tx-info-table{width:100%;font-size:12px;border-collapse:collapse;margin-bottom:10px;}
         .tx-info-table td{padding:3px;vertical-align:top;}
         .tx-info-table td:first-child{color:#889;white-space:nowrap;}
@@ -437,7 +507,7 @@
         .tx-freq-table { width: 100%; font-size: 12px; border-collapse: collapse; }
         .tx-freq-table td { padding: 4px; border-bottom: 1px solid #1e3050; }
         .tx-freq-table tr:last-child td { border-bottom: none; }
-        
+
         .tx-tune-btn { cursor: pointer; transition: all 0.2s; text-decoration: none; }
         .tx-tune-btn:hover { color: #fff !important; text-shadow: 0 0 5px #4aaeff; text-decoration: underline; }
 
@@ -448,7 +518,7 @@
         #as-header{display:flex;align-items:center;justify-content:space-between;padding:7px 14px;background:var(--color-2,#162032);color:#fff;cursor:move;user-select:none;min-height:38px;flex-shrink:0;}
         #as-header .as-title{font-size:14px;font-weight:bold;display:flex;align-items:center;gap:8px;}
         #as-header .as-title i{color:#4aaeff;}
-        
+
         #as-header-info:hover { text-decoration:underline; color:#fff !important; }
 
         #as-reload{background:none;border:none;color:#adf;font-size:18px;cursor:pointer;padding:0 6px;line-height:1;transition:transform 0.4s;}
@@ -457,7 +527,7 @@
         @keyframes as-spin{to{transform:rotate(360deg);}}
         #as-close{background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:0 4px;line-height:1;}
         #as-close:hover{color:#f66;}
-        
+
         #as-map{flex:1;width:100%;min-height:0;position:relative;display:flex;flex-direction:column;}
         #as-leaflet-wrap{flex:1;width:100%;position:relative;}
 
@@ -478,20 +548,20 @@
         #as-freq-lock { background: transparent !important; border: none !important; color: #fff !important; cursor: pointer !important; font-size: 16px !important; padding: 0 !important; margin: 0 !important; display: flex !important; align-items: center !important; justify-content: center !important; width: 20px !important; height: 24px !important; line-height: 1 !important; transition: color 0.2s; }
         #as-freq-lock:hover { color: #4aaeff !important; }
         #as-freq-lock.locked { color: #f66 !important; }
-        
+
         #as-statusbar{background:#0d1420;color:#9bb;font-size:11px;padding:5px 12px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;border-top:1px solid #1e3050;flex-shrink:0; padding-right: 25px;}
         .as-dot{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:middle;margin-right:3px;}
-        
+
         #as-resizer {
             position: absolute; right: 2px; bottom: 2px; width: 16px; height: 16px; cursor: nwse-resize; z-index: 10;
             background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="%2388aadd" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v6h-6M21 21l-7-7M3 9V3h6M3 3l7 7"/></svg>') center/contain no-repeat;
         }
-        
+
         .as-countdown-cell{font-size:13px;font-weight:bold;}
         .as-countdown-neg{color:#f55;}
         .as-countdown-zero{color:#4f4;}
         .as-countdown-pos{color:#5af;}
-        
+
         .as-ac-tooltip { background: rgba(17,24,39,0.95) !important; border: 1px solid #4aaeff !important; color: #fff !important; font-size: 12px; padding: 10px 12px; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.6); }
         .as-ac-tooltip b { color: #4aaeff; font-size: 13px; }
 
@@ -501,7 +571,7 @@
         .as-fade-out{animation:as-fo 0.4s forwards;}
         @keyframes as-fi{from{opacity:0}to{opacity:1}}
         @keyframes as-fo{from{opacity:1}to{opacity:0}}
-        
+
         #as-settings-btn{background:none;border:none;color:#adf;font-size:15px;cursor:pointer;padding:0 6px;line-height:1;}
         #as-settings-btn:hover{color:#fff;}
         #as-settings-panel{display:none;position:absolute;top:42px;right:40px;z-index:10001;background:#1a2535;border:1px solid #2a4a7a;border-radius:8px;padding:14px 18px 12px;min-width:320px;box-shadow:0 4px 24px rgba(0,0,0,0.7);font-size:12px;color:#cde;}
@@ -511,11 +581,13 @@
 
         .as-setting-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;gap:8px;}
         .as-setting-row label{flex:1;color:#9bb;white-space:nowrap;}
-        .as-setting-row input[type=number], .as-setting-row input[type=text]{width:80px;height:24px!important;min-height:24px!important;background:#0d1420;border:1px solid #2a4a7a;color:#fff;border-radius:4px!important;padding:2px 6px;font-size:12px;text-align:right; box-sizing:border-box;}
-        .as-setting-row input[type=text]{padding-right:20px;} 
-        .as-setting-row input:focus{outline:none;border-color:#4aaeff;}
+        .as-setting-row input[type=number], .as-setting-row input[type=text], .as-setting-row select{width:80px;height:24px!important;min-height:24px!important;background:#0d1420;border:1px solid #2a4a7a;color:#fff;border-radius:4px!important;padding:2px 6px;font-size:12px;text-align:right; box-sizing:border-box;}
+        .as-setting-row input[type=text]{padding-right:20px;}
+        .as-setting-row input:focus, .as-setting-row select:focus{outline:none;border-color:#4aaeff;}
+        .as-setting-row select{text-align:left;}
         .as-setting-unit{color:#668;min-width:36px;}
-        
+        #as-s-actype, #as-s-filter { width: 124px !important; flex: 0 0 124px !important; }
+
         #as-settings-apply{margin-top:10px;width:100%;padding:6px;background:#1a6de0!important;color:#fff!important;border:none!important;border-radius:5px!important;cursor:pointer;font-size:12px;height:auto!important;line-height:normal!important;}
         #as-settings-apply:hover{background:#2a7df0!important;}
         #as-settings-reset{margin-top:5px;width:100%;padding:5px;background:#2a3545!important;color:#9bb!important;border:1px solid #2a4a7a!important;border-radius:5px!important;cursor:pointer;font-size:11px;height:auto!important;line-height:normal!important;}
@@ -530,22 +602,22 @@
             flex: 1; width: 100%; display: block; cursor: grab;
         }
         #as-profile-canvas:active { cursor: grabbing; }
-		
+
         #as-profile-y-zoom-container {
             position: absolute; right: 0px; top: 0; bottom: 0; width: 35px;
             display: flex; align-items: center; justify-content: center; z-index: 20;
         }
         #as-profile-y-zoom {
-            transform: rotate(-90deg); 
-            width: 90px !important; 
-            min-width: 90px !important; 
-            height: 8px !important; 
-            flex-shrink: 0 !important; 
+            transform: rotate(-90deg);
+            width: 90px !important;
+            min-width: 90px !important;
+            height: 8px !important;
+            flex-shrink: 0 !important;
             margin: 0 !important;
             padding: 0 !important;
-            -webkit-appearance: none; 
-            background: #1e3050; 
-            border-radius: 2px; 
+            -webkit-appearance: none;
+            background: #1e3050;
+            border-radius: 2px;
             outline: none;
         }
         #as-profile-y-zoom::-webkit-slider-thumb {
@@ -553,7 +625,7 @@
             background: #4aaeff; cursor: ns-resize; border: 2px solid #1a2535;
         }
         #as-profile-y-zoom::-webkit-slider-thumb:hover { background: #fff; }
-		#as-help-btn{text-decoration:none!important;}
+        #as-help-btn{text-decoration:none!important;}
         #as-help-btn:hover{color:#fff!important;text-decoration:none!important;}
     `;
     document.head.appendChild(style);
@@ -609,7 +681,7 @@
     function deadReckon(lat,lon,trackDeg,speedKts,dtSec){
         return deadReckonRad(lat,lon,trackDeg,(speedKts*1.852/3600)*dtSec);
     }
-    
+
     function radioHorizonKm(h1m,h2m){ return 4.12*(Math.sqrt(Math.max(0,h1m))+Math.sqrt(Math.max(0,h2m))); }
 
     function crossAlongTrack(aLat,aLon,bLat,bLon,pLat,pLon){
@@ -634,6 +706,58 @@
         return pts;
     }
 
+    function getOverlapDistances(rxLat, rxLon, txLat, txLon, txTerrainM, elevs, refAltM) {
+        if (!elevs || elevs.length === 0) return null;
+
+        const d_txrx = haversineKm(txLat, txLon, rxLat, rxLon);
+        const txAltM = (txTerrainM || 0) + TX_HEIGHT_DEFAULT_M;
+        const rxAltM = _rxElevM;
+
+        const stepKm = d_txrx / (elevs.length - 1);
+        const c_factor = 16.974;
+
+        let m_max_rx = -Infinity;
+        const hrx_arr = new Float64Array(elevs.length);
+        for (let i = 0; i < elevs.length; i++) {
+            const x = i * stepKm;
+            if (x === 0) { hrx_arr[i] = rxAltM; }
+            else {
+                const c_drop = (x * x) / c_factor;
+                const m = (elevs[i] - rxAltM - c_drop) / x;
+                if (m > m_max_rx) m_max_rx = m;
+                hrx_arr[i] = rxAltM + m_max_rx * x + c_drop;
+            }
+        }
+
+        let m_max_tx = -Infinity;
+        const htx_arr = new Float64Array(elevs.length);
+        for (let i = elevs.length - 1; i >= 0; i--) {
+            const d_tx = d_txrx - (i * stepKm);
+            if (d_tx === 0) { htx_arr[i] = txAltM; }
+            else {
+                const c_drop = (d_tx * d_tx) / c_factor;
+                const m = (elevs[i] - txAltM - c_drop) / d_tx;
+                if (m > m_max_tx) m_max_tx = m;
+                htx_arr[i] = txAltM + m_max_tx * d_tx + c_drop;
+            }
+        }
+
+        let startDist = null;
+        let endDist = null;
+
+        for (let i = 0; i < elevs.length; i++) {
+            const maxH = Math.max(hrx_arr[i], htx_arr[i]);
+            if (maxH <= refAltM) {
+                const x = i * stepKm;
+                if (startDist === null) startDist = x;
+                endDist = x;
+            }
+        }
+
+        if (startDist === null) return null;
+        return { startDist, endDist };
+    }
+
     function txSiblings(tx) {
         return txStations
             .filter(t => Math.abs(t.lat-tx.lat)<0.0001 && Math.abs(t.lon-tx.lon)<0.0001)
@@ -641,13 +765,13 @@
     }
 
     function gridKey(lat,lon){ return Math.floor(lat/5)+'_'+Math.floor(lon/5); }
-    
-	async function buildTxGridAsync(stations) {
+
+    async function buildTxGridAsync(stations) {
         const g = {};
         let lastYield = performance.now();
         for (let i = 0; i < stations.length; i++) {
             if (performance.now() - lastYield > 10) {
-                await new Promise(r => setTimeout(r, 5)); // Give the browser time for Audio/UI
+                await new Promise(r => setTimeout(r, 5));
                 lastYield = performance.now();
             }
             const tx = stations[i];
@@ -657,7 +781,7 @@
         }
         return g;
     }
-	
+
     function nearbyTx(acLat,acLon){
         const r=[];
         for(let dlat=-1;dlat<=1;dlat++) for(let dlon=-1;dlon<=1;dlon++){
@@ -683,8 +807,8 @@
         const bRx = bearingDeg(acLat, acLon, rxLat, rxLon);
         const optimalTrack = ((bTx + normalizeAngle180(bRx - bTx)/2 + 360) % 360 + 90) % 360;
         let trackDiff = Math.abs(normalizeAngle180(acTrackDeg - optimalTrack));
-        if (trackDiff > 90) trackDiff = 180 - trackDiff; 
-        return 0.3 + 0.7 * Math.max(0, Math.cos(toRad(trackDiff))); 
+        if (trackDiff > 90) trackDiff = 180 - trackDiff;
+        return 0.3 + 0.7 * Math.max(0, Math.cos(toRad(trackDiff)));
     }
 
     function _evalScatterAt(acLat,acLon,acAltFt,acTrackDeg,acCategory,rxLat,rxLon,rxElevM,tx){
@@ -692,15 +816,14 @@
         const altM=acAltFt*0.3048, txEffM=(tx.terrainM||0)+TX_HEIGHT_DEFAULT_M;
         const d_tx=haversineKm(acLat,acLon,txLat,txLon), d_rx=haversineKm(acLat,acLon,rxLat,rxLon), d_txrx=haversineKm(txLat,txLon,rxLat,rxLon);
 
-        if(d_tx < 5 || d_rx < 5 || d_txrx<S.minTxRxDistKm) return null; 
-        
-        // Dynamic elevation limit (9 degrees) for transmitting & receiving antenna
+        if(d_tx < 5 || d_rx < 5 || d_txrx<S.minTxRxDistKm) return null;
+
         const elevAngleTx = toDeg(Math.atan2(Math.max(0, altM - txEffM) / 1000, d_tx));
         const elevAngleRx = toDeg(Math.atan2(Math.max(0, altM - rxElevM) / 1000, d_rx));
         if (elevAngleTx > 9 || elevAngleRx > 9) return null;
 
         if(d_tx>radioHorizonKm(txEffM,altM) || d_rx>radioHorizonKm(rxElevM,altM)) return null;
-        
+
         const dynamicEllipseFactor = 1.02 + Math.min(1.0, altM / 12000) * 0.06;
         if(d_tx+d_rx>dynamicEllipseFactor*d_txrx) return null;
 
@@ -719,11 +842,12 @@
         return { score:Math.max(0, Math.min(100,Math.round(baseScore * sizeMult))), crossTrackKm };
     }
 
-    function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
-        if(!ac.lat||!ac.lon||isNaN(ac.lat)||isNaN(ac.lon)) return null;
-        if((ac.speed||0)<50 || (ac.alt_ft||0)<1000) return null; 
-        
-        const txLat=parseFloat(tx.lat),txLon=parseFloat(tx.lon);
+function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
+    if(!ac.lat||!ac.lon||isNaN(ac.lat)||isNaN(ac.lon)) return null;
+    if((ac.speed||0)<50 || (ac.alt_ft||0)<1000) return null;
+    if (!meetsAcTypeFilter(ac)) return null;
+
+    const txLat=parseFloat(tx.lat),txLon=parseFloat(tx.lon);
         const crossPt=(ac.track!==null)?gcIntersectionPoint(txLat,txLon,rxLat,rxLon,ac.lat,ac.lon,ac.track):midpointGreatCircle(txLat,txLon,rxLat,rxLon);
         const speedKmS=((ac.speed||0)*1.852)/3600;
         if(speedKmS<=0) return null;
@@ -747,7 +871,7 @@
         return { score: bestScore, etaSec, crossPt };
     }
 
-    // ── Persistent Candidates Processing (Async Chunked & Decoupled) ──────
+    // ── Persistent Candidates Processing ──────────────────────────────────
     async function computePersistentCrossings(robustAircraftList, rxLat, rxLon) {
         if(!txStations||txStations.length===0) return;
         const activeIcaos = new Set(robustAircraftList.map(a=>a.icao24));
@@ -759,30 +883,37 @@
         let lastYield = performance.now();
         for (let i = 0; i < robustAircraftList.length; i++) {
             if (performance.now() - lastYield > 10) {
-                await new Promise(r => setTimeout(r, 5)); 
+                await new Promise(r => setTimeout(r, 5));
                 lastYield = performance.now();
             }
 
             const ac = robustAircraftList[i];
             if(!ac.lat||!ac.lon) continue;
-            
+
             if(!_persistentCrossings[ac.icao24]) _persistentCrossings[ac.icao24] = {};
             const crossings = _persistentCrossings[ac.icao24];
-            
+
             const nearby = nearbyTx(ac.lat, ac.lon);
-            const currentCalcTime = Date.now(); 
-            
+            const currentCalcTime = Date.now();
+
             for(let j = 0; j < nearby.length; j++) {
                 const tx = nearby[j];
                 const txKey = tx.lat+'_'+tx.lon+'_'+tx.freq;
+				
+// Remove existing crossing if aircraft no longer meets filter
+if (!meetsAcTypeFilter(ac)) {
+    delete _persistentCrossings[ac.icao24];
+    continue;
+}
+
                 const r = calcScatter(ac, rxLat, rxLon, _rxElevM, tx);
-                
+
                 if (r) {
                     if (crossings[txKey]) {
-                        crossings[txKey].etaSec = r.etaSec;
-                        crossings[txKey].ac = ac; 
-                        crossings[txKey].score = r.score;
-                        crossings[txKey].calcTime = currentCalcTime;
+                        crossings[txKey].etaSec   = r.etaSec;
+                        crossings[txKey].ac        = ac;
+                        crossings[txKey].score     = r.score;
+                        crossings[txKey].calcTime  = currentCalcTime;
                     } else if (r.score >= S.minScore) {
                         crossings[txKey] = { tx, ac, etaSec: r.etaSec, score: r.score, calcTime: currentCalcTime };
                     }
@@ -803,8 +934,7 @@
         if (!isCompassLocked || lastRotorAzimuth === null) return;
         const az = lastRotorAzimuth;
         let dirs = [];
-        
-        // 360 degrees divided into 16 sectors of 22.5 degrees each
+
         if (az >= 348.75 || az < 11.25) dirs = ['N'];
         else if (az >= 11.25 && az < 33.75) dirs = ['N', 'NO'];
         else if (az >= 33.75 && az < 56.25) dirs = ['NO'];
@@ -823,8 +953,6 @@
         else if (az >= 326.25 && az < 348.75) dirs = ['NW', 'N'];
 
         _activeCompass = dirs;
-        // DO NOT delete the selected station anymore!
-        // _activeTxKey = null; 
         updateCompassUI();
     }
 
@@ -835,44 +963,38 @@
         for (let icao in _persistentCrossings) {
             for (let tK in _persistentCrossings[icao]) {
                 const cr = _persistentCrossings[icao][tK];
+                // elapsed = Zeit seit dem letzten calcTime (= letzter startUpdate)
                 const elapsed = (now - cr.calcTime) / 1000;
                 const liveEta = cr.etaSec - elapsed;
-                
+
                 if (liveEta <= S.leadTimeSec && liveEta >= -S.trailTimeSec) {
-                    
-                    // Priority 1: If a station is explicitly selected
+
                     if (_activeTxKey) {
                         if (tK !== _activeTxKey) continue;
-                        // Ignore all background filters so the station remains open!
                         out.push({...cr, liveEta, elapsed});
                         continue;
                     }
-                    
-                    // Priority 2: Normal filtering (compass directions)
+
                     if (_activeCompass && _activeCompass.length > 0) {
                         const brg = bearingDeg(rx.lat, rx.lon, cr.tx.lat, cr.tx.lon);
                         const dirs = {N:[337.5,22.5], NO:[22.5,67.5], O:[67.5,112.5], SO:[112.5,157.5], S:[157.5,202.5], SW:[202.5,247.5], W:[247.5,292.5], NW:[292.5,337.5]};
-                        
+
                         let isMatch = false;
                         for (let dir of _activeCompass) {
                             const d = dirs[dir];
                             if (d) {
                                 const match = d[0]>d[1] ? (brg>=d[0]||brg<d[1]) : (brg>=d[0]&&brg<d[1]);
-                                if (match) {
-                                    isMatch = true;
-                                    break;
-                                }
+                                if (match) { isMatch = true; break; }
                             }
                         }
                         if (!isMatch) continue;
                     }
-                    
-                    // Priority 3: Normal filtering (frequency)
+
                     if (_activeFreq !== null) {
                         const match = txSiblings(cr.tx).some(t => Math.round(t.freq*100)===Math.round(_activeFreq*100));
                         if (!match) continue;
                     }
-                    
+
                     out.push({...cr, liveEta, elapsed});
                 }
             }
@@ -886,7 +1008,7 @@
             if(!groups[cr.ac.icao24]) groups[cr.ac.icao24] = [];
             groups[cr.ac.icao24].push(cr);
         });
-        
+
         const primary = [];
         Object.values(groups).forEach(crs => {
             const activeNow = crs.find(c => Math.abs(c.liveEta) <= 5);
@@ -943,7 +1065,7 @@
     function updateRxMarkerTooltip(rx) {
         if(!rxMarker) return;
         const isGps = (gpsLat && gpsLon && gpsLat === rx.lat && gpsLon === rx.lon) ? '<span style="color:#00ee44; font-size:11px; margin-left:6px; vertical-align:middle;">[GPS]</span>' : '';
-        
+
         let rxItu = '';
         if (txStations && txStations.length > 0) {
             const closest = txStations.reduce((prev, curr) => (prev.dist < curr.dist) ? prev : curr);
@@ -966,7 +1088,7 @@
                     <tr><td>Antenna (AGL)</td><td style="text-align:right;">${S.rxAglM} m</td></tr>
                 </table>
             </div>`;
-            
+
         if (!rxMarker.getTooltip()) {
             rxMarker.bindTooltip(rxTtHtml, {direction: 'top', sticky: true, className: 'as-ac-tooltip-wrap', opacity: 1});
         } else {
@@ -985,13 +1107,12 @@
                 <td style="color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 120px;">${progName}</td>
                 <td style="color:#889; text-align:center; padding:0 8px;">${(t.pol||'').toLowerCase()}</td>
                 <td style="color:#cde; text-align:right; white-space:nowrap;">${t.erp} kW</td>
-            </tr>
-            `;
+            </tr>`;
         }).join('');
-        
+
         const distStr = S.useMetric ? tx.dist + ' km' : Math.round(tx.dist * 0.621371) + ' mi';
         const flagHtml = getFlagImg(tx.itu, 24, 18);
-        
+
         return `
             <div class="as-ac-tooltip" style="min-width:260px;">
                 <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
@@ -1006,17 +1127,16 @@
                 <div style="background:var(--color-2,#162032); padding:6px; border-radius:6px; margin-top:10px;">
                     <table class="tx-freq-table">${progsRows}</table>
                 </div>
-            </div>
-        `;
+            </div>`;
     }
 
-    // ── Elevation Profile Render Logic ────────────────────────────────────
+    // ── Elevation Profile ─────────────────────────────────────────────────
     function resizeProfileCanvas() {
         const panel = document.getElementById('as-profile-panel');
         const canvas = document.getElementById('as-profile-canvas');
         if(panel && canvas) {
             canvas.width = panel.clientWidth;
-            canvas.height = panel.clientHeight - 38; 
+            canvas.height = panel.clientHeight - 38;
         }
     }
 
@@ -1035,25 +1155,17 @@
 
             const range = profMaxX - profMinX;
             const mouseKm = profMinX + ((mouseX - padL) / drawW) * range;
-
             const zoomFactor = e.deltaY > 0 ? 1.15 : 0.85;
             let newRange = range * zoomFactor;
 
             if(newRange > _currentProfileDist) newRange = _currentProfileDist;
-            if(newRange < 5) newRange = 5; 
+            if(newRange < 5) newRange = 5;
 
             let newMin = mouseKm - ((mouseX - padL) / drawW) * newRange;
             let newMax = newMin + newRange;
 
-            if (newMin < 0) {
-                newMax -= newMin;
-                newMin = 0;
-            }
-            if (newMax > _currentProfileDist) {
-                newMin -= (newMax - _currentProfileDist);
-                newMax = _currentProfileDist;
-            }
-            
+            if (newMin < 0) { newMax -= newMin; newMin = 0; }
+            if (newMax > _currentProfileDist) { newMin -= (newMax - _currentProfileDist); newMax = _currentProfileDist; }
             if (newMin < 0) newMin = 0;
             if (newMax > _currentProfileDist) newMax = _currentProfileDist;
 
@@ -1062,35 +1174,28 @@
             redrawActiveProfile();
         });
 
-        canvas.addEventListener('mousedown', (e) => { 
-            if(_activeProfileTxKey){ isDraggingProf = true; lastMouseX = e.clientX; } 
+        canvas.addEventListener('mousedown', (e) => {
+            if(_activeProfileTxKey){ isDraggingProf = true; lastMouseX = e.clientX; }
         });
         window.addEventListener('mouseup', () => isDraggingProf = false);
         window.addEventListener('mousemove', (e) => {
             if(!isDraggingProf || !_activeProfileTxKey) return;
-            const dx = e.clientX - lastMouseX; 
+            const dx = e.clientX - lastMouseX;
             lastMouseX = e.clientX;
-            
             const w = canvas.width;
             const drawW = w - 45 - 25;
             const range = profMaxX - profMinX;
-            
             const shiftKm = -(dx / drawW) * range;
-
             let newMin = profMinX + shiftKm;
             let newMax = profMaxX + shiftKm;
-
-            if(newMin < 0) { 
-                newMin = 0; newMax = range; 
-            } else if(newMax > _currentProfileDist) { 
-                newMax = _currentProfileDist; newMin = _currentProfileDist - range; 
-            }
-            
-            profMinX = newMin; 
-            profMaxX = newMax; 
+            if(newMin < 0) { newMin = 0; newMax = range; }
+            else if(newMax > _currentProfileDist) { newMax = _currentProfileDist; newMin = _currentProfileDist - range; }
+            profMinX = newMin;
+            profMaxX = newMax;
             redrawActiveProfile();
         });
-		const yZoom = document.getElementById('as-profile-y-zoom');
+
+        const yZoom = document.getElementById('as-profile-y-zoom');
         if(yZoom) {
             yZoom.addEventListener('input', (e) => {
                 profScaleY = parseFloat(e.target.value);
@@ -1107,10 +1212,8 @@
     function redrawActiveProfile() {
         if(!_activeProfileTxKey || !_activeProfileTxObj) return;
         const rx = getRxCoords(); if(!rx) return;
-        
         const allVisible = getActiveVisibleCrossings();
         const matchingCrs = allVisible.filter(c => (c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq) === _activeProfileTxKey);
-        
         drawProfile(matchingCrs, _currentPathElevs, rx, _activeProfileTxObj);
     }
 
@@ -1136,7 +1239,7 @@
             ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; ctx.fillRect(padL, padT, drawW, drawH);
             ctx.fillStyle = '#adf'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
             ctx.fillText('⏳ Fetching Topography Data...', padL + drawW/2, padT + drawH/2);
-            return; 
+            return;
         }
 
         const losFloor = [];
@@ -1147,11 +1250,11 @@
         const hrx_arr = new Float64Array(elevs.length);
         for (let i = 0; i < elevs.length; i++) {
             const x = i * stepKm;
-            if (x === 0) { hrx_arr[i] = rxAltM; } 
+            if (x === 0) { hrx_arr[i] = rxAltM; }
             else {
-                const c_drop = (x * x) / c_factor; 
-                const m = (elevs[i] - rxAltM - c_drop) / x; 
-                if (m > m_max_rx) m_max_rx = m; 
+                const c_drop = (x * x) / c_factor;
+                const m = (elevs[i] - rxAltM - c_drop) / x;
+                if (m > m_max_rx) m_max_rx = m;
                 hrx_arr[i] = rxAltM + m_max_rx * x + c_drop;
             }
         }
@@ -1159,8 +1262,8 @@
         let m_max_tx = -Infinity;
         const htx_arr = new Float64Array(elevs.length);
         for (let i = elevs.length - 1; i >= 0; i--) {
-            const d_tx = d_txrx - (i * stepKm); 
-            if (d_tx === 0) { htx_arr[i] = txAltM; } 
+            const d_tx = d_txrx - (i * stepKm);
+            if (d_tx === 0) { htx_arr[i] = txAltM; }
             else {
                 const c_drop = (d_tx * d_tx) / c_factor;
                 const m = (elevs[i] - txAltM - c_drop) / d_tx;
@@ -1169,7 +1272,7 @@
             }
         }
 
-        let minPurpleH = Infinity; 
+        let minPurpleH = Infinity;
         for (let i = 0; i < elevs.length; i++) {
             const ptMax = Math.max(hrx_arr[i], htx_arr[i]);
             losFloor.push({ x: i * stepKm, hrx: hrx_arr[i], htx: htx_arr[i], max: ptMax });
@@ -1184,21 +1287,20 @@
                 drLat = p.lat; drLon = p.lon;
             }
             const {alongTrackKm} = crossAlongTrack(rx.lat, rx.lon, tx.lat, tx.lon, drLat, drLon);
-            const acX = alongTrackKm;
             const acAltM = (cr.ac.alt_ft||0)*0.3048;
-            planeData.push({ cr, acX, acAltM, ac: cr.ac });
+            planeData.push({ cr, acX: alongTrackKm, acAltM, ac: cr.ac });
         });
 
         let maxH = Math.max(12000, (minPurpleH !== Infinity ? minPurpleH + 1000 : 12000));
-        let minH = 0; 
+        let minH = 0;
 
         for(let i=0; i<elevs.length; i++){ if(elevs[i] > maxH) maxH = elevs[i]; }
         if (rxAltM > maxH) maxH = rxAltM;
         if (txAltM > maxH) maxH = txAltM;
         planeData.forEach(p => { if(p.acAltM > maxH) maxH = p.acAltM; });
 
-        maxH *= 1.2; 
-        maxH /= profScaleY; 
+        maxH *= 1.2;
+        maxH /= profScaleY;
 
         const scaleX = drawW / (profMaxX - profMinX), scaleY = drawH / (maxH - minH);
         const mapX = xKm => padL + (xKm - profMinX) * scaleX;
@@ -1218,8 +1320,6 @@
         let highestPlaneM = 12000;
         if (planeData.length > 0) {
             highestPlaneM = Math.max(12000, Math.max(...planeData.map(p => p.acAltM)) + 1000);
-        } else if (minPurpleH !== Infinity && minPurpleH < 12000) {
-            highestPlaneM = 12000;
         }
 
         ctx.save();
@@ -1236,10 +1336,10 @@
         if (!first) {
             ctx.lineTo(mapX(d_txrx), mapY(highestPlaneM));
             ctx.lineTo(mapX(0), mapY(highestPlaneM));
-            ctx.fillStyle = 'rgba(200, 50, 255, 0.25)'; 
+            ctx.fillStyle = 'rgba(200, 50, 255, 0.25)';
             ctx.fill();
         }
-        ctx.restore(); 
+        ctx.restore();
 
         ctx.beginPath();
         losFloor.forEach((pt, i) => i === 0 ? ctx.moveTo(mapX(pt.x), mapY(pt.hrx)) : ctx.lineTo(mapX(pt.x), mapY(pt.hrx)));
@@ -1254,7 +1354,7 @@
         ctx.lineTo(mapX(d_txrx), h - padB); ctx.closePath();
         ctx.fillStyle = '#1e3050'; ctx.fill(); ctx.strokeStyle = '#2a4a7a'; ctx.lineWidth = 2; ctx.stroke();
 
-        const drawnLabels = []; 
+        const drawnLabels = [];
 
         planeData.forEach(p => {
             const liveEta = p.cr.liveEta, baseColor = scoreColor(p.cr.score);
@@ -1265,40 +1365,32 @@
             ctx.beginPath(); ctx.moveTo(mapX(p.acX), mapY(p.acAltM)); ctx.lineTo(mapX(d_txrx), mapY(txAltM)); ctx.stroke();
             ctx.setLineDash([]);
 
-            ctx.fillStyle = renderColor; 
+            ctx.fillStyle = renderColor;
             ctx.beginPath(); ctx.arc(mapX(p.acX), mapY(p.acAltM), 4, 0, Math.PI*2); ctx.fill();
-            
+
             ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
             const labelStr = (p.ac.callsign || p.ac.icao24).toUpperCase() + ' | ' + Math.round(p.acAltM) + 'm';
             let textX = mapX(p.acX);
-            
             let textY = mapY(p.acAltM) - 12;
-            if (textY < padT + 8) {
-                textY = mapY(p.acAltM) + 15;
-            }
-            
+            if (textY < padT + 8) textY = mapY(p.acAltM) + 15;
+
             const textW = ctx.measureText(labelStr).width;
             if (textX - textW/2 < padL) textX = padL + textW/2 + 2;
             if (textX + textW/2 > w - padR) textX = w - padR - textW/2 - 2;
-            
-            let overlap = true;
-            let attempts = 0;
+
+            let overlap = true, attempts = 0;
             while(overlap && attempts < 6) {
-                overlap = drawnLabels.some(rect => {
-                    return Math.abs(textX - rect.x) < (textW/2 + rect.w/2 + 4) && 
-                           Math.abs(textY - rect.y) < 14; 
-                });
+                overlap = drawnLabels.some(rect =>
+                    Math.abs(textX - rect.x) < (textW/2 + rect.w/2 + 4) &&
+                    Math.abs(textY - rect.y) < 14
+                );
                 if (overlap) {
-                    textY -= 14; 
-                    if (textY < padT + 8) {
-                        textY = mapY(p.acAltM) + 15 + (attempts * 14);
-                    }
+                    textY -= 14;
+                    if (textY < padT + 8) textY = mapY(p.acAltM) + 15 + (attempts * 14);
                     attempts++;
                 }
             }
-            
             if (textY < padT + 6) textY = padT + 6;
-            
             drawnLabels.push({x: textX, y: textY, w: textW});
             ctx.fillText(labelStr, textX, textY);
         });
@@ -1307,57 +1399,46 @@
         ctx.beginPath(); ctx.moveTo(mapX(0), mapY(elevs[0])); ctx.lineTo(mapX(0), mapY(rxAltM)); ctx.stroke();
         ctx.beginPath(); ctx.moveTo(mapX(d_txrx), mapY(elevs[elevs.length-1])); ctx.lineTo(mapX(d_txrx), mapY(txAltM)); ctx.stroke();
 
-        ctx.restore(); 
+        ctx.restore();
 
-        ctx.fillStyle = '#668'; 
+        ctx.fillStyle = '#668';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        
+
         const isMetric = S.useMetric;
-        const distConv = isMetric ? 1 : 0.621371; 
+        const distConv = isMetric ? 1 : 0.621371;
         const viewDistDisp = (profMaxX - profMinX) * distConv;
-        
+
         let tickStep = 10;
         if (viewDistDisp > 800) tickStep = 200;
         else if (viewDistDisp > 400) tickStep = 100;
         else if (viewDistDisp > 200) tickStep = 50;
         else if (viewDistDisp > 100) tickStep = 25;
-        
+
         const startDisp = Math.ceil((profMinX * distConv) / tickStep) * tickStep;
         const endDisp = Math.floor((profMaxX * distConv) / tickStep) * tickStep;
         const unitStr = isMetric ? ' km' : ' mi';
-        
+
         for (let d = startDisp; d <= endDisp; d += tickStep) {
             const xKm = d / distConv;
             const screenX = mapX(xKm);
-            
             if (screenX > padL + 30 && screenX < (w - padR) - 30) {
                 ctx.fillText(d + unitStr, screenX, h - padB + 12);
-                
-                ctx.strokeStyle = '#2a4a7a';
-                ctx.lineWidth = 1.5;
-                ctx.beginPath();
-                ctx.moveTo(screenX, h - padB);
-                ctx.lineTo(screenX, h - padB + 4);
-                ctx.stroke();
+                ctx.strokeStyle = '#2a4a7a'; ctx.lineWidth = 1.5;
+                ctx.beginPath(); ctx.moveTo(screenX, h - padB); ctx.lineTo(screenX, h - padB + 4); ctx.stroke();
             }
         }
 
-        if (profMinX <= 0) { 
-            ctx.fillStyle = '#adf'; ctx.textAlign = 'center'; 
-            ctx.fillText('RX', mapX(0), h - padB + 12); 
-        }
-        if (profMaxX >= d_txrx) { 
-            ctx.fillStyle = '#adf'; ctx.textAlign = 'center'; 
-            ctx.fillText('TX', mapX(d_txrx), h - padB + 12); 
-        }
+        if (profMinX <= 0) { ctx.fillStyle = '#adf'; ctx.textAlign = 'center'; ctx.fillText('RX', mapX(0), h - padB + 12); }
+        if (profMaxX >= d_txrx) { ctx.fillStyle = '#adf'; ctx.textAlign = 'center'; ctx.fillText('TX', mapX(d_txrx), h - padB + 12); }
     }
 
-    // ── Map Drawing ──────────────────────────────────────────────────────
+    // ── Map Drawing ────────────────────────────────────────��──────────────
     function drawStaticLayers(crossings, rxLat, rxLon){
         if(!mapInstance||!txLayer||!lineLayer) return;
-        
+
         const activeKeys = new Set();
+        const refAltM = 12000;
 
         crossings.forEach(cr=>{
             const {tx,score}=cr;
@@ -1367,21 +1448,50 @@
 
             activeKeys.add(txKey);
 
+            const fullPathPts = generatePathPoints(rxLat, rxLon, tx.lat, tx.lon, 50);
+            const fullPathCoords = fullPathPts.map(p => [p.lat, p.lon]);
+
+            let bgCoords = fullPathCoords;
+            let overlapOpacity = 0;
+
+            if (isHighlighted && _currentPathElevs && _currentPathElevs.length > 0) {
+                const overlap = getOverlapDistances(rxLat, rxLon, tx.lat, tx.lon, tx.terrainM, _currentPathElevs, refAltM);
+                if (overlap) {
+                    const brg = bearingDeg(rxLat, rxLon, tx.lat, tx.lon);
+                    const segCoords = [];
+                    const steps = 25;
+                    const stepDist = (overlap.endDist - overlap.startDist) / (steps - 1);
+                    for(let i = 0; i < steps; i++) {
+                        const d = overlap.startDist + i * stepDist;
+                        const p = deadReckonRad(rxLat, rxLon, brg, d);
+                        segCoords.push([p.lat, p.lon]);
+                    }
+                    bgCoords = segCoords;
+                    overlapOpacity = 0.45;
+                }
+            }
+
             if(!_txElements[txKey]){
-                const visualLine = L.polyline([[tx.lat,tx.lon],[rxLat,rxLon]],{ color, weight:isHighlighted?2.5:1.6, opacity:isHighlighted?0.85:0.55, dashArray:'8 5', interactive: false }).addTo(lineLayer);
+                const visualLineBg = L.polyline(bgCoords, {
+                    color: '#c832ff', weight: 8, opacity: overlapOpacity, interactive: false
+                }).addTo(lineLayer);
+
+                const visualLine = L.polyline(fullPathCoords, {
+                    color, weight:isHighlighted?2.5:1.6, opacity:isHighlighted?0.85:0.55, dashArray:'8 5', interactive: false
+                }).addTo(lineLayer);
 
                 const txM=L.marker([tx.lat,tx.lon],{ icon: txDotIcon(color,tx.erp,isHighlighted), zIndexOffset: isHighlighted?200:100 });
                 txM.bindTooltip(buildTxTooltip(tx, rxLat, rxLon), {direction: 'top', sticky: true, className: 'as-ac-tooltip-wrap', opacity: 1});
-                
-                txM.on('click',(e)=>{
-                    L.DomEvent.stopPropagation(e);
-                    showTxDetails(txKey, tx); 
-                });
+                txM.on('click',(e)=>{ L.DomEvent.stopPropagation(e); showTxDetails(txKey, tx); });
                 txLayer.addLayer(txM);
-                
-                _txElements[txKey] = { visualLine, txM, baseColor: color, erp: tx.erp, isHighlighted };
+
+                _txElements[txKey] = { visualLine, visualLineBg, txM, baseColor: color, erp: tx.erp, isHighlighted };
             } else {
                 const t = _txElements[txKey];
+                if (isHighlighted) t.visualLineBg.setLatLngs(bgCoords);
+                t.visualLine.setLatLngs(fullPathCoords);
+                t.visualLineBg.setStyle({opacity: overlapOpacity});
+
                 if(t.baseColor !== color || t.isHighlighted !== isHighlighted) {
                     t.baseColor = color;
                     t.isHighlighted = isHighlighted;
@@ -1394,6 +1504,7 @@
 
         for(let key in _txElements) {
             if(!activeKeys.has(key)) {
+                lineLayer.removeLayer(_txElements[key].visualLineBg);
                 lineLayer.removeLayer(_txElements[key].visualLine);
                 txLayer.removeLayer(_txElements[key].txM);
                 delete _txElements[key];
@@ -1414,7 +1525,7 @@
             activeIcaos.add(cr.ac.icao24);
             const ac = cr.ac;
             const liveEta = cr.liveEta;
-            
+
             let drLat=ac.lat, drLon=ac.lon;
             if(ac.track!==null && ac.speed>0) {
                 const p = deadReckon(ac.lat, ac.lon, ac.track, ac.speed, cr.elapsed);
@@ -1424,7 +1535,7 @@
             const isNow = Math.abs(liveEta) <= 5;
             const renderColor = isNow ? '#00ee44' : scoreColor(cr.score);
             const opacity = liveEta > (S.leadTimeSec/2) ? 0.6 : 1.0;
-            
+
             if (isNow && _txElements[cr.tx.lat+'_'+cr.tx.lon+'_'+cr.tx.freq]) {
                 const t = _txElements[cr.tx.lat+'_'+cr.tx.lon+'_'+cr.tx.freq];
                 t.visualLine.setStyle({color: '#00ee44', weight: 2.5, opacity: 0.85});
@@ -1433,7 +1544,9 @@
 
             const ttHtml = `
                 <div class="as-ac-tooltip">
-                    <b>✈ ${ac.callsign||ac.icao24}</b><br>
+                    <b>✈ ${ac.callsign||ac.icao24}</b>
+                    ${ac.type ? `<span style="color:#ffcc00;font-size:11px;margin-left:6px;">${ac.type}</span>` : ''}
+                    ${ac.category ? `<span style="color:#adf;font-size:11px;margin-left:6px;">[${ac.category}]</span>` : ''}<br>
                     Alt: ${fmtAlt(ac.alt_ft)}<br>
                     Spd: ${fmtSpeed(ac.speed)} | Trk: ${ac.track?Math.round(ac.track)+'°':'—'}<br>
                     VSpd: ${fmtVspeed(ac.vspeed)}<br>
@@ -1448,17 +1561,15 @@
                 _drMarkers[ac.icao24].marker.setLatLng([drLat,drLon]);
                 _drMarkers[ac.icao24].marker.setIcon(planeIcon(ac.track,renderColor,opacity,ac.category));
                 _drMarkers[ac.icao24].marker.setTooltipContent(ttHtml);
-                
                 _drMarkers[ac.icao24].label.setLatLng([drLat,drLon]);
                 const span=_drMarkers[ac.icao24].label._icon?.querySelector('span');
                 if(span){ span.textContent=fmtEta(liveEta); span.className='as-countdown-cell '+etaClass(liveEta); span.parentElement.style.opacity=opacity; }
             } else {
                 const acM=L.marker([drLat,drLon],{icon:planeIcon(ac.track,renderColor,opacity,ac.category),zIndexOffset:500});
                 acM.bindTooltip(ttHtml, {direction: 'top', sticky: true, className: 'as-ac-tooltip-wrap', opacity: 1});
-                
                 const lblM=L.marker([drLat,drLon],{
                     icon:L.divIcon({
-                        html:`<div style="opacity:${opacity}"><span class="as-countdown-cell ${etaClass(liveEta)}" 
+                        html:`<div style="opacity:${opacity}"><span class="as-countdown-cell ${etaClass(liveEta)}"
                             style="font-size:10px;background:rgba(0,0,0,0.65);color:#fff;padding:1px 4px;border-radius:3px;white-space:nowrap;">${fmtEta(liveEta)}</span></div>`,
                         className:'',iconSize:null,iconAnchor:[-14,6]
                     }),interactive:false
@@ -1490,7 +1601,6 @@
             return;
         }
 
-        // Build a map of what's currently rendered
         const existingItems = {};
         body.querySelectorAll('.as-list-item[data-tx-key]').forEach(el => {
             const k = el.dataset.txKey + '|' + (el.dataset.icao || '');
@@ -1509,26 +1619,17 @@
             const scoreColorVal = scoreColor(cr.score);
 
             if(existingItems[mapKey]) {
-                // Surgical update: only ETA and score
                 const el = existingItems[mapKey];
                 el.className = 'as-list-item ' + approaching;
-
                 const scoreEl = el.querySelector('.as-li-score');
                 if(scoreEl) { scoreEl.textContent = cr.score + '%'; scoreEl.style.color = scoreColorVal; }
-
                 const etaEl = el.querySelector('.as-li-eta');
                 if(etaEl) { etaEl.textContent = fmtEta(cr.liveEta); etaEl.className = 'as-li-eta ' + etaClass_; }
-
-                // Ensure correct position
                 const children = [...body.children];
-                if(children.indexOf(el) !== idx) {
-                    body.insertBefore(el, body.children[idx] || null);
-                }
+                if(children.indexOf(el) !== idx) body.insertBefore(el, body.children[idx] || null);
             } else {
-                // New item — build full HTML including flag (only once per item)
                 const flagHtml = getFlagImg(cr.tx.itu, 16, 12);
                 const prefix = flagHtml ? flagHtml + ' ' : '→ ';
-
                 const el = document.createElement('div');
                 el.className = 'as-list-item ' + approaching;
                 el.dataset.txKey = tKey;
@@ -1546,12 +1647,10 @@
                     const txObj = Object.values(_persistentCrossings).flatMap(m=>Object.values(m)).find(c=>(c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq)===tKey)?.tx;
                     if(txObj) showTxDetails(tKey, txObj);
                 });
-
                 body.insertBefore(el, body.children[idx] || null);
             }
         });
 
-        // Remove stale items
         Object.entries(existingItems).forEach(([k, el]) => {
             if(!newKeys.has(k)) el.remove();
         });
@@ -1560,29 +1659,27 @@
     async function showTxDetails(txKey, tx) {
         document.getElementById('as-list-header').style.display = 'none';
         document.getElementById('as-list-body').style.display = 'none';
-        
+
         const dp = document.getElementById('as-tx-detail-panel');
         dp.style.display = 'flex';
         renderTxDetailsContent(txKey, tx);
 
         const rx = getRxCoords();
         if(rx) {
-            _activeProfileTxKey = txKey; 
+            _activeProfileTxKey = txKey;
             _activeProfileTxObj = tx;
-            profMinX = 0; 
-            profMaxX = 0; 
+            profMinX = 0;
+            profMaxX = 0;
             document.getElementById('as-profile-panel').style.display = 'flex';
-            resizeProfileCanvas(); 
+            resizeProfileCanvas();
         }
 
         setTxFilter(txKey);
 
         if(rx && mapInstance) {
             mapInstance.invalidateSize();
-            
             const bounds = L.latLngBounds([[rx.lat, rx.lon], [tx.lat, tx.lon]]);
             const allCrs = getActiveVisibleCrossings().filter(c => (c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq) === txKey);
-            
             allCrs.forEach(cr => {
                 let drLat = cr.ac.lat, drLon = cr.ac.lon;
                 if(cr.ac.track !== null && cr.ac.speed > 0) {
@@ -1591,13 +1688,10 @@
                 }
                 bounds.extend([drLat, drLon]);
             });
-
-            setTimeout(() => {
-                mapInstance.fitBounds(bounds, { padding: [50, 50], maxZoom: 10 });
-            }, 50);
-
+            setTimeout(() => mapInstance.fitBounds(bounds, { padding: [50, 50], maxZoom: 10 }), 50);
             _currentPathElevs = await fetchPathElevation(rx.lat, rx.lon, tx.lat, tx.lon, txKey);
             redrawActiveProfile();
+            redrawFiltered();
         }
     }
 
@@ -1605,14 +1699,12 @@
         document.getElementById('as-tx-detail-panel').style.display = 'none';
         document.getElementById('as-list-header').style.display = 'flex';
         document.getElementById('as-list-body').style.display = 'block';
-
         document.getElementById('as-profile-panel').style.display = 'none';
-        
-        _activeProfileTxKey = null; _activeProfileTxObj = null;
 
-        _activeTxKey = null; 
+        _activeProfileTxKey = null; _activeProfileTxObj = null;
+        _activeTxKey = null;
         updateCompassUI();
-        
+
         if(mapInstance) mapInstance.invalidateSize();
         redrawFiltered();
     }
@@ -1632,9 +1724,21 @@
             const progsRows = siblings.map(t => {
                 const progName = t.station || t.ps || '?';
                 const tuneCmd = `T${Math.round(t.freq * 1000)}`;
+
+                let playIconHtml = '';
+                if (t.id) {
+                    const isPlaying = (asCurrentStreamId === t.id);
+                    const iconClass = isPlaying ? 'fa-square' : 'fa-play';
+                    const iconColor = isPlaying ? '#fff' : '#4aaeff';
+                    playIconHtml = `<i class="fas ${iconClass} as-stream-btn" style="color:${iconColor}; cursor:pointer;" title="Play Livestream" onclick="window._asHandleStreamClick('${t.id}', '${progName.replace(/'/g, "\\'")}', this)" onmouseover="if(this.classList.contains('fa-play')) this.style.color='#fff'" onmouseout="if(this.classList.contains('fa-play')) this.style.color='#4aaeff'"></i>`;
+                } else {
+                    playIconHtml = `<i class="fas fa-play" style="color:#334; cursor:not-allowed;" title="No Stream available"></i>`;
+                }
+
                 return `
                 <tr>
-                    <td style="color:#4aaeff; white-space:nowrap; cursor:pointer;"
+                    <td style="width:20px; text-align:center; padding-right:8px;">${playIconHtml}</td>
+                    <td style="color:#4aaeff; white-space:nowrap; cursor:pointer; padding-right:8px;"
                         title="Click to tune"
                         onmouseover="this.style.textDecoration='underline'; this.style.color='#fff';"
                         onmouseout="this.style.textDecoration='none'; this.style.color='#4aaeff';"
@@ -1648,21 +1752,18 @@
             }).join('');
 
             const flagHtml = getFlagImg(tx.itu, 20, 15);
-            
-            // Calculate azimuth and format HTML
+
             let azHtml = '—';
             if (rx) {
                 const az = Math.round(bearingDeg(rx.lat, rx.lon, tx.lat, tx.lon));
                 const canTurnRotor = (isAdminLoggedIn || isTuneLoggedIn) && lastRotorAzimuth !== null;
-                
                 if (canTurnRotor) {
-                    azHtml = `<span style="color:#4aaeff; cursor:pointer;" 
+                    azHtml = `<span style="color:#4aaeff; cursor:pointer;"
                                     title="Click to turn Rotor to ${az}°"
                                     onmouseover="this.style.textDecoration='underline'; this.style.color='#fff';"
                                     onmouseout="this.style.textDecoration='none'; this.style.color='#4aaeff';"
                                     onclick="if(window._asSendRotorPosition) window._asSendRotorPosition(${az});">
-                              ${az}°
-                              </span>`;
+                              ${az}°</span>`;
                 } else {
                     azHtml = `${az}°`;
                 }
@@ -1682,8 +1783,7 @@
                     <table class="tx-freq-table">${progsRows}</table>
                 </div>
                 <div style="color:#889; font-size:11px; margin-bottom:4px; border-bottom:1px solid #2a4a7a; padding-bottom:2px;">Crossing Aircraft</div>
-                <div id="as-tx-ac-list"></div>
-            `;
+                <div id="as-tx-ac-list"></div>`;
         }
 
         const acListEl = document.getElementById('as-tx-ac-list');
@@ -1696,7 +1796,6 @@
         }
 
         const activeIcaos = new Set(allCrs.map(c => c.ac.icao24));
-
         acListEl.querySelectorAll('[data-icao]').forEach(el => {
             if (!activeIcaos.has(el.dataset.icao)) el.remove();
         });
@@ -1712,7 +1811,6 @@
                 row.className = 'tx-ac-row';
                 row.dataset.icao = icao;
                 row.innerHTML = `<span style="color:#fff;">${nameHtml}</span><span class="as-tx-eta-cell">${etaHtml}</span>`;
-
                 const rows = acListEl.querySelectorAll('[data-icao]');
                 if (idx < rows.length) acListEl.insertBefore(row, rows[idx]);
                 else acListEl.appendChild(row);
@@ -1726,20 +1824,20 @@
     function redrawFiltered() {
         const rx = getRxCoords(); if(!rx) return;
         const allVisible = getActiveVisibleCrossings();
-        allVisible.sort((a,b) => a.score - b.score); 
+        allVisible.sort((a,b) => a.score - b.score);
         const primaryVisible = getPrimaryCrossings(allVisible);
-        
+
         drawStaticLayers(allVisible, rx.lat, rx.lon);
         updateAircraftMarkers(primaryVisible);
         updateListPanel(primaryVisible);
-        
+
         if(_activeTxKey && document.getElementById('as-tx-detail-panel').style.display === 'flex') {
             const txObj = Object.values(_persistentCrossings).flatMap(m=>Object.values(m)).find(c=>(c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq)===_activeTxKey)?.tx;
             if(txObj) renderTxDetailsContent(_activeTxKey, txObj);
         }
-        
+
         if(_activeProfileTxKey && document.getElementById('as-profile-panel').style.display === 'flex') {
-            redrawActiveProfile(); 
+            redrawActiveProfile();
         }
 
         const infoEl = document.getElementById('as-header-info');
@@ -1757,13 +1855,11 @@
             } else {
                 infoEl.style.display = 'none';
             }
-            
+
             infoEl.onclick = () => {
                 if (_activeTxKey) {
-                    // Case 1: Station is selected -> Only close station
-                    hideTxDetails(); 
+                    hideTxDetails();
                 } else {
-                    // Case 2: No station selected -> Remove all filters and locks
                     isCompassLocked = false;
                     _activeCompass = null;
                     const compassLockBtn = document.getElementById('as-compass-lock');
@@ -1772,21 +1868,16 @@
                         compassLockBtn.classList.remove('locked');
                         compassLockBtn.title = "Lock Compass to Rotor";
                     }
-
                     isFreqLocked = false;
                     _activeFreq = null;
                     const freqInp = document.getElementById('as-freq-input');
-                    if (freqInp) {
-                        freqInp.disabled = false;
-                        freqInp.value = '';
-                    }
+                    if (freqInp) { freqInp.disabled = false; freqInp.value = ''; }
                     const freqLockBtn = document.getElementById('as-freq-lock');
                     if (freqLockBtn) {
                         freqLockBtn.textContent = '🔓';
                         freqLockBtn.classList.remove('locked');
                         freqLockBtn.title = "Lock Frequency to Radio";
                     }
-
                     updateCompassUI();
                     redrawFiltered();
                 }
@@ -1803,14 +1894,10 @@
                     if (mainWebsocket.readyState === WebSocket.OPEN) {
                         debugLog("Main WebSocket already connected.");
                     } else {
-                        mainWebsocket.addEventListener("open", () => {
-                            debugLog("Main WebSocket connected.");
-                        });
+                        mainWebsocket.addEventListener("open", () => debugLog("Main WebSocket connected."));
                     }
-                    mainWebsocket.addEventListener("error", (error) => {
-                        debugLog("Main WebSocket error:", error);
-                    });
-                    mainWebsocket.addEventListener("close", (event) => {
+                    mainWebsocket.addEventListener("error", (error) => debugLog("Main WebSocket error:", error));
+                    mainWebsocket.addEventListener("close", () => {
                         debugLog("Main WebSocket connection closed, retrying in 5 seconds.");
                         setTimeout(setupMainWebSocket, 5000);
                     });
@@ -1823,7 +1910,6 @@
         }
     }
 
-    // Radio text/status WS to fetch current frequency automatically
     function setupRdsWebSocket() {
         if (rdsWebsocket && rdsWebsocket.readyState !== WebSocket.CLOSED) return;
         try {
@@ -1836,11 +1922,11 @@
                     if (data.freq !== undefined) newFreq = parseFloat(data.freq);
                     else if (data.frequency !== undefined) newFreq = parseFloat(data.frequency);
                     else if (data.status && data.status.freq !== undefined) newFreq = parseFloat(data.status.freq);
-                    
+
                     if (newFreq !== null) {
                         if (newFreq > 8700) newFreq = newFreq / 100;
                         else if (newFreq >= 870 && newFreq <= 1080) newFreq = newFreq / 10;
-                        
+
                         const freqInp = document.getElementById('as-freq-input');
                         if (freqInp && freqInp.value !== newFreq.toFixed(2)) {
                             freqInp.value = newFreq.toFixed(2);
@@ -1875,15 +1961,32 @@
             <div class="as-setting-row"><label>Trail time (Visible until)</label>
                 <input type="text" id="as-s-trail" placeholder="mm:ss" value="${formatTimeStr(S.trailTimeSec)}">
                 <span class="as-setting-unit">mm:ss</span></div>
-            <div class="as-setting-row"><label>Fetch radius (TX & Aircraft)</label>
+            <div class="as-setting-row"><label>Fetch radius (TX &amp; Aircraft)</label>
                 <input type="number" id="as-s-maxrad" min="100" max="1500" step="50" value="${S.txRadiusKm}">
                 <span class="as-setting-unit">km</span></div>
             <div class="as-setting-row"><label>Min scatter score (peak)</label>
                 <input type="number" id="as-s-score" min="1" max="99" step="1" value="${S.minScore}">
                 <span class="as-setting-unit">%</span></div>
-            
+            <div class="as-setting-row"><label>Aircraft type filter</label>
+			<select id="as-s-actype">
+				<option value="all" ${S.acTypeFilter==='all' ?'selected':''}>All aircraft</option>
+				<option value="A5"  ${S.acTypeFilter==='A5'  ?'selected':''}>A5+ only (Super Heavy)</option>
+				<option value="A4"  ${S.acTypeFilter==='A4'  ?'selected':''}>A4+ (Heavy & above)</option>
+				<option value="A3"  ${S.acTypeFilter==='A3'  ?'selected':''}>A3+ (Large & above)</option>
+				<option value="A2"  ${S.acTypeFilter==='A2'  ?'selected':''}>A2+ (Small & above)</option>
+				<option value="A1"  ${S.acTypeFilter==='A1'  ?'selected':''}>A1+ (Light & above)</option>
+			</select>
+            </div>
+
+            <div class="as-setting-row">
+                <label>Frequency filter list</label>
+                <select id="as-s-filter" title="Loading available lists...">
+                    <option value="none">None</option>
+                </select>
+            </div>
+
             <div style="border-top:1px solid #2a4a7a;margin:8px 0 6px;"></div>
-            
+
             <div class="as-setting-row">
                 <label style="color:#fff;">Use Metric System</label>
                 <input type="checkbox" id="as-s-metric" ${S.useMetric ? 'checked' : ''} style="width:auto; cursor:pointer;">
@@ -1900,99 +2003,157 @@
         </div>`;
     }
 
+
     function initSettingsPanel(){
-        const btn=document.getElementById('as-settings-btn'), panel=document.getElementById('as-settings-panel');
-        if(!btn||!panel) return;
-        
-        btn.addEventListener('click', e => { e.stopPropagation(); panel.style.display = panel.style.display !== 'none' ? 'none' : 'block'; });
+        const btn   = document.getElementById('as-settings-btn');
+        const panel = document.getElementById('as-settings-panel');
+        if(!btn || !panel) return;
+
+        async function checkAvailableFilters() {
+            const checkFile = async (fileName) => {
+                try {
+                    const url = `${currentURL.protocol}//${currentURL.host}/plugins/AirplaneScatter/${fileName}?t=${Date.now()}`;
+                    const res = await fetch(url, { method: 'HEAD' });
+                    return res.ok;
+                } catch(e) { return false; }
+            };
+
+            const [hasBlacklist, hasWhitelist] = await Promise.all([
+                checkFile('blacklist.txt'),
+                checkFile('whitelist.txt')
+            ]);
+
+            const filterSelect = document.getElementById('as-s-filter');
+            if (!filterSelect) return;
+
+            if (hasBlacklist) {
+                const opt = document.createElement('option');
+                opt.value = 'blacklist'; opt.textContent = 'Blacklist';
+                filterSelect.appendChild(opt);
+            }
+            if (hasWhitelist) {
+                const opt = document.createElement('option');
+                opt.value = 'whitelist'; opt.textContent = 'Whitelist';
+                filterSelect.appendChild(opt);
+            }
+
+            filterSelect.title = '';
+
+            if ((S.filterMode === 'blacklist' && hasBlacklist) || (S.filterMode === 'whitelist' && hasWhitelist)) {
+                filterSelect.value = S.filterMode;
+            } else {
+                filterSelect.value = 'none';
+                if (S.filterMode !== 'none') {
+                    S.filterMode = 'none';
+                    localStorage.setItem('as_filter_mode', 'none');
+                }
+            }
+        }
+        checkAvailableFilters();
+
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            panel.style.display = panel.style.display !== 'none' ? 'none' : 'block';
+        });
         document.getElementById('as-settings-close').onclick = () => panel.style.display = 'none';
-        document.addEventListener('click', e => { if(!panel.contains(e.target) && e.target !== btn) panel.style.display = 'none'; });
+        document.addEventListener('click', e => {
+            if(!panel.contains(e.target) && e.target !== btn) panel.style.display = 'none';
+        });
 
         document.getElementById('as-settings-apply').addEventListener('click', () => {
             const v = id => document.getElementById(id).value;
             const isM = document.getElementById('as-s-metric').checked;
-            
-            localStorage.setItem('as_use_metric', isM);
-            localStorage.setItem('as_min_txrx_dist', v('as-s-txrx'));
-            localStorage.setItem('as_min_erp', v('as-s-erp'));
-            localStorage.setItem('as_lead_time_str', v('as-s-lead'));
-            localStorage.setItem('as_trail_time_str', v('as-s-trail'));
-            
-            const maxRad = v('as-s-maxrad');
-            localStorage.setItem('as_tx_radius', maxRad);
-            localStorage.setItem('as_ac_radius', maxRad);
-            
-            localStorage.setItem('as_min_score', v('as-s-score'));
-            localStorage.setItem('as_rx_agl', v('as-s-rxagl'));
 
-            S = loadSettings(); _rxElevM = _rxTerrainM + S.rxAglM;
+            const newRadius = parseInt(v('as-s-maxrad'), 10);
+            const radiusChanged = newRadius !== S.txRadiusKm;
+
+            localStorage.setItem('as_use_metric',       isM);
+            localStorage.setItem('as_min_txrx_dist',    v('as-s-txrx'));
+            localStorage.setItem('as_min_erp',          v('as-s-erp'));
+            localStorage.setItem('as_lead_time_str',    v('as-s-lead'));
+            localStorage.setItem('as_trail_time_str',   v('as-s-trail'));
+            localStorage.setItem('as_filter_mode',      v('as-s-filter'));
+            localStorage.setItem('as_ac_type_filter',   v('as-s-actype'));
+            localStorage.setItem('as_tx_radius',        newRadius);
+            localStorage.setItem('as_ac_radius',        newRadius);
+            localStorage.setItem('as_min_score',        v('as-s-score'));
+            localStorage.setItem('as_rx_agl',           v('as-s-rxagl'));
+
+            S = loadSettings();
+            _rxElevM = _rxTerrainM + S.rxAglM;
             panel.style.display = 'none';
-            _persistentCrossings = {}; 
+            _persistentCrossings = {};
+            const detailBody = document.getElementById('as-tx-detail-body');
+            if (detailBody) detailBody.dataset.txKey = '';
+
+            if (radiusChanged) {
+                localStorage.removeItem(DB_CACHE_KEY);
+                localStorage.removeItem(DB_CACHE_TS);
+                localStorage.removeItem(DB_CACHE_LOC);
+            }
+
             startUpdate(false);
         });
-        
+
         document.getElementById('as-settings-reset').addEventListener('click', () => {
-            document.getElementById('as-s-metric').checked = true;
-            document.getElementById('as-s-txrx').value = 400;
-            document.getElementById('as-s-erp').value = 100;
-            document.getElementById('as-s-lead').value = '03:00';
-            document.getElementById('as-s-trail').value = '01:00';
-            document.getElementById('as-s-maxrad').value = 750;
-            document.getElementById('as-s-score').value = 75;
-            document.getElementById('as-s-rxagl').value = RX_AGL_DEFAULT_M;
+            document.getElementById('as-s-metric').checked  = true;
+            document.getElementById('as-s-txrx').value      = 400;
+            document.getElementById('as-s-erp').value       = 100;
+            document.getElementById('as-s-lead').value      = '03:00';
+            document.getElementById('as-s-trail').value     = '01:00';
+            document.getElementById('as-s-maxrad').value    = 750;
+            document.getElementById('as-s-score').value     = 70;
+            document.getElementById('as-s-rxagl').value     = RX_AGL_DEFAULT_M;
+            document.getElementById('as-s-filter').value    = 'none';
+            document.getElementById('as-s-actype').value    = 'all';
         });
     }
 
-    // ── Main UI Layout ───────────────────────────────────────────────────
-    function createMapContainer(rxLat,rxLon){
+    // ── Main UI Layout ────────────────────────────────────────────────────
+    function createMapContainer(rxLat, rxLon){
         if(mapContainer) return;
-        
-        // Read again when opening!
+
         let startLeft   = parseInt(localStorage.getItem('as_left'))   || 240;
         let startTop    = parseInt(localStorage.getItem('as_top'))    || 20;
         let startWidth  = parseInt(localStorage.getItem('as_width'))  || 820;
         let startHeight = parseInt(localStorage.getItem('as_height')) || 640;
 
-        // Bounds check so it doesn't pop up offscreen
         if (startLeft < 0) startLeft = 0;
-        if (startTop < 0) startTop = 0;
-        if (startLeft > window.innerWidth - 100) startLeft = window.innerWidth - 300;
-        if (startTop > window.innerHeight - 100) startTop = 20;
+        if (startTop  < 0) startTop  = 0;
+        if (startLeft > window.innerWidth  - 100) startLeft = window.innerWidth  - 300;
+        if (startTop  > window.innerHeight - 100) startTop  = 20;
 
         const wrapper = document.createElement('div');
         wrapper.id = 'as-wrapper';
-        wrapper.style.cssText = `left:${startLeft}px;top:${startTop}px;width:${startWidth+250}px;height:${startHeight}px;`;
+        wrapper.style.cssText = `left:${startLeft}px;top:${startTop}px;width:${startWidth+290}px;height:${startHeight}px;`;
 
         const listPanel = document.createElement('div');
         listPanel.id = 'as-list-panel';
         listPanel.innerHTML = `
             <div id="as-list-header"><span>📡 Scatter Candidates</span></div>
             <div id="as-list-body"><div style="padding:10px;color:#446;">Loading…</div></div>
-            
             <div id="as-tx-detail-panel">
                 <div class="as-sub-header">
                     <div class="as-sub-title">📡 Transmitter Details</div>
                     <button id="as-tx-detail-close" class="as-sub-close">✕</button>
                 </div>
                 <div id="as-tx-detail-body"></div>
-            </div>
-        `;
+            </div>`;
         wrapper.appendChild(listPanel);
 
         mapContainer = document.createElement('div');
         mapContainer.id = 'as-container';
         mapContainer.style.width = startWidth + 'px';
-        
-        // Check if we need to show the lock or the X
-        const showLock = lastRotorAzimuth !== null;
-        const lockIcon = isCompassLocked ? '🔒' : '🔓';
+
+        const showLock  = lastRotorAzimuth !== null;
+        const lockIcon  = isCompassLocked ? '🔒' : '🔓';
         const lockTitle = isCompassLocked ? 'Unlock Compass' : 'Lock Compass to Rotor';
         const lockClass = isCompassLocked ? 'locked' : '';
 
         mapContainer.innerHTML = `
             <div id="as-header">
                 <div class="as-title"><i class="fas fa-plane"></i><span> Airplane Scatter</span></div>
-                <div id="as-header-info" style="color:#4aaeff; font-size:12px; font-weight:bold; cursor:pointer; display:none; flex:1; text-align:center;">1 station selected (click to clear)</div>
+                <div id="as-header-info" style="color:#4aaeff;font-size:12px;font-weight:bold;cursor:pointer;display:none;flex:1;text-align:center;">1 station selected (click to clear)</div>
                 <div style="display:flex;align-items:center;gap:8px;">
                     <a id="as-help-btn" href="https://highpoint.fmdx.org/manuals/AirplaneScatter-Documentation.html" target="_blank" title="Documentation" style="color:#adf;font-size:15px;padding:0 6px;line-height:1;text-decoration:none;display:flex;align-items:center;">&#63;</a>
                     <button id="as-settings-btn" title="Settings">&#9881;</button>
@@ -2000,7 +2161,7 @@
                     <button id="as-close" title="Close">&#x2715;</button>
                 </div>
             </div>
-            
+
             <div id="as-map">
                 <div id="as-leaflet-wrap"></div>
 
@@ -2009,8 +2170,8 @@
                     <button class="as-comp-btn" data-dir="N">N</button>
                     <button class="as-comp-btn" data-dir="NO">NO</button>
                     <button class="as-comp-btn" data-dir="W">W</button>
-                    <button class="as-comp-btn as-comp-center" id="as-compass-clear" data-dir="ALL" style="display:${showLock ? 'none' : 'flex'};">✕</button>
-                    <button class="as-comp-btn as-comp-center ${lockClass}" id="as-compass-lock" title="${lockTitle}" style="display:${showLock ? 'flex' : 'none'};">${lockIcon}</button>
+                    <button class="as-comp-btn as-comp-center" id="as-compass-clear" data-dir="ALL" style="display:${showLock?'none':'flex'};">✕</button>
+                    <button class="as-comp-btn as-comp-center ${lockClass}" id="as-compass-lock" title="${lockTitle}" style="display:${showLock?'flex':'none'};">${lockIcon}</button>
                     <button class="as-comp-btn" data-dir="O">O</button>
                     <button class="as-comp-btn" data-dir="SW">SW</button>
                     <button class="as-comp-btn" data-dir="S">S</button>
@@ -2027,7 +2188,7 @@
                         <div class="as-sub-title">⛰️ Elevation Profile</div>
                         <button id="as-profile-close" class="as-sub-close">✕</button>
                     </div>
-                    <div style="position:relative; flex:1; width:100%; display:flex;">
+                    <div style="position:relative;flex:1;width:100%;display:flex;">
                         <canvas id="as-profile-canvas"></canvas>
                         <div id="as-profile-y-zoom-container" title="Vertical Zoom (Double-click to reset)">
                             <input type="range" id="as-profile-y-zoom" min="0.2" max="4.0" step="0.1" value="1.0">
@@ -2040,9 +2201,10 @@
                 <span id="as-stat-ac">✈ —</span>
                 <span id="as-stat-cand">📡 —</span>
                 <span id="as-stat-db">DB: —</span>
-                <span id="as-stat-msg" style="margin-left:auto; font-weight:bold;"></span>
+                <span id="as-stat-msg" style="margin-left:auto;font-weight:bold;"></span>
             </div>
             <div id="as-resizer"></div>`;
+
         wrapper.appendChild(mapContainer);
         document.body.appendChild(wrapper);
         wrapper.classList.add('as-fade-in');
@@ -2053,12 +2215,15 @@
         initSettingsPanel();
         initProfileCanvasEvents();
 
-        document.getElementById('as-close').onclick = closeMap;
+        document.getElementById('as-close').onclick           = closeMap;
         document.getElementById('as-tx-detail-close').onclick = hideTxDetails;
-        document.getElementById('as-profile-close').onclick = hideTxDetails; 
+        document.getElementById('as-profile-close').onclick   = hideTxDetails;
 
         document.getElementById('as-reload').onclick = () => {
-            localStorage.removeItem(DB_CACHE_KEY); localStorage.removeItem(DB_CACHE_TS); localStorage.removeItem(DB_CACHE_LOC); startUpdate(true);
+            localStorage.removeItem(DB_CACHE_KEY);
+            localStorage.removeItem(DB_CACHE_TS);
+            localStorage.removeItem(DB_CACHE_LOC);
+            startUpdate(true);
         };
 
         const freqInp = document.getElementById('as-freq-input');
@@ -2066,13 +2231,12 @@
             freqInp.addEventListener('input', (e) => {
                 _activeFreq = parseFreq(e.target.value);
                 redrawFiltered();
-                
                 if (_activeFreq !== null && typeof socket !== 'undefined' && socket.readyState === 1) {
                     socket.send('T' + Math.round(_activeFreq * 1000));
                 }
             });
         }
-        
+
         const freqLock = document.getElementById('as-freq-lock');
         if (freqLock) {
             freqLock.addEventListener('click', () => {
@@ -2086,32 +2250,29 @@
                     freqLock.textContent = '🔓';
                     freqLock.classList.remove('locked');
                     freqLock.title = "Lock Frequency to Radio";
-                    if (freqInp) {
-                        freqInp.disabled = false;
-                        freqInp.value = '';
-                    }
+                    if (freqInp) { freqInp.disabled = false; freqInp.value = ''; }
                     _activeFreq = null;
                     redrawFiltered();
                 }
             });
         }
 
-        ensureLeaflet(()=>{
+        ensureLeaflet(() => {
             if (freqLock) {
                 freqLock.addEventListener('mousedown', L.DomEvent.stopPropagation);
-                freqLock.addEventListener('dblclick', L.DomEvent.stopPropagation);
+                freqLock.addEventListener('dblclick',  L.DomEvent.stopPropagation);
             }
 
             const compassClearBtn = document.getElementById('as-compass-clear');
             if (compassClearBtn) {
                 compassClearBtn.addEventListener('click', (e) => {
                     L.DomEvent.stopPropagation(e);
-                    _activeCompass = null; 
-                    _activeTxKey = null; 
+                    _activeCompass = null;
+                    _activeTxKey   = null;
                     updateCompassUI(); redrawFiltered();
                 });
                 compassClearBtn.addEventListener('mousedown', L.DomEvent.stopPropagation);
-                compassClearBtn.addEventListener('dblclick', L.DomEvent.stopPropagation);
+                compassClearBtn.addEventListener('dblclick',  L.DomEvent.stopPropagation);
             }
 
             const compassLockBtn = document.getElementById('as-compass-lock');
@@ -2129,125 +2290,116 @@
                         compassLockBtn.classList.remove('locked');
                         compassLockBtn.title = "Lock Compass to Rotor";
                     }
-                    updateCompassUI();
-                    redrawFiltered();
+                    updateCompassUI(); redrawFiltered();
                 });
                 compassLockBtn.addEventListener('mousedown', L.DomEvent.stopPropagation);
-                compassLockBtn.addEventListener('dblclick', L.DomEvent.stopPropagation);
+                compassLockBtn.addEventListener('dblclick',  L.DomEvent.stopPropagation);
             }
 
-            // Adjust the event for the compass buttons in ensureLeaflet from createMapContainer():
             document.querySelectorAll('.as-comp-btn:not(.as-comp-center)').forEach(b => {
                 b.addEventListener('click', (e) => {
                     L.DomEvent.stopPropagation(e);
-                    if (isCompassLocked) return; // If locked to rotor, block manual input
-                    
+                    if (isCompassLocked) return;
                     const dir = e.target.dataset.dir;
-                    
-                    // If no direction is active yet, start a new array
                     if (!_activeCompass) {
                         _activeCompass = [dir];
                     } else {
-                        // If the direction is already in the array, remove it
                         if (_activeCompass.includes(dir)) {
                             _activeCompass = _activeCompass.filter(d => d !== dir);
-                            // If no direction is left, set the filter to null (deactivated)
-                            if (_activeCompass.length === 0) {
-                                _activeCompass = null;
-                            }
+                            if (_activeCompass.length === 0) _activeCompass = null;
                         } else {
-                            // If the direction is not yet in the array, add it
                             _activeCompass.push(dir);
                         }
                     }
-                    
-                    _activeTxKey = null; 
-                    updateCompassUI(); 
-                    redrawFiltered();
+                    _activeTxKey = null;
+                    updateCompassUI(); redrawFiltered();
                 });
                 b.addEventListener('mousedown', L.DomEvent.stopPropagation);
-                b.addEventListener('dblclick', L.DomEvent.stopPropagation);
+                b.addEventListener('dblclick',  L.DomEvent.stopPropagation);
             });
 
             if (freqInp) {
                 freqInp.addEventListener('mousedown', L.DomEvent.stopPropagation);
-                freqInp.addEventListener('dblclick', L.DomEvent.stopPropagation);
+                freqInp.addEventListener('dblclick',  L.DomEvent.stopPropagation);
             }
 
             const mapDiv = document.getElementById('as-leaflet-wrap');
             mapInstance = L.map(mapDiv, {zoomControl:true}).setView([rxLat, rxLon], 6);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'Leaflet | &copy; OpenStreetMap', maxZoom:13 }).addTo(mapInstance);
-            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: 'Leaflet | &copy; OpenStreetMap', maxZoom: 13
+            }).addTo(mapInstance);
+
             lineLayer     = L.layerGroup().addTo(mapInstance);
             txLayer       = L.layerGroup().addTo(mapInstance);
             aircraftLayer = L.layerGroup().addTo(mapInstance);
 
-            const rxIcon = L.divIcon({ html: `<div style="width:16px;height:16px;border-radius:50%;background:#2196F3;border:3px solid #0b5ed7;"></div>`, className: '', iconSize: [16,16], iconAnchor: [8,8] });
-            rxMarker = L.marker([rxLat, rxLon], {icon: rxIcon, zIndexOffset: 2000}).addTo(mapInstance);
-
-            mapInstance.on('click', () => { 
-                if(_activeTxKey) hideTxDetails();
+            const rxIcon = L.divIcon({
+                html: `<div style="width:16px;height:16px;border-radius:50%;background:#2196F3;border:3px solid #0b5ed7;"></div>`,
+                className: '', iconSize: [16,16], iconAnchor: [8,8]
             });
-
+            rxMarker = L.marker([rxLat, rxLon], {icon: rxIcon, zIndexOffset: 2000}).addTo(mapInstance);
+            mapInstance.on('click', () => { if(_activeTxKey) hideTxDetails(); });
             setTimeout(() => mapInstance.invalidateSize(), 200);
         });
     }
 
     function setTxFilter(txKey) {
-        _activeTxKey = txKey; 
-
+        _activeTxKey = txKey;
     }
 
     function updateCompassUI() {
         document.querySelectorAll('.as-comp-btn:not(.as-comp-center)').forEach(b => {
             if(_activeCompass && _activeCompass.includes(b.dataset.dir)) b.classList.add('active');
             else b.classList.remove('active');
-            
-            if (isCompassLocked) {
-                b.style.opacity = '0.5';
-                b.style.cursor = 'not-allowed';
-            } else {
-                b.style.opacity = '1';
-                b.style.cursor = 'pointer';
-            }
+            if (isCompassLocked) { b.style.opacity = '0.5'; b.style.cursor = 'not-allowed'; }
+            else                  { b.style.opacity = '1';   b.style.cursor = 'pointer'; }
         });
     }
 
     function closeMap() {
-        mapActive=false;
-        if(aircraftTimer){clearInterval(aircraftTimer);aircraftTimer=null;}
-        if(countdownTimer){clearInterval(countdownTimer);countdownTimer=null;}
-        const btn=document.getElementById('AIRPLANESCATTER-on-off'); if(btn) btn.classList.remove('active');
-        const wrapper=document.getElementById('as-wrapper');
-        if(wrapper){ 
-            wrapper.classList.remove('as-fade-in'); 
-            wrapper.classList.add('as-fade-out'); 
+        mapActive = false;
+        if(aircraftTimer)  { clearInterval(aircraftTimer);  aircraftTimer  = null; }
+        if(countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+        const btn = document.getElementById('AIRPLANESCATTER-on-off');
+        if(btn) btn.classList.remove('active');
+        const wrapper = document.getElementById('as-wrapper');
+        if(wrapper) {
+            wrapper.classList.remove('as-fade-in');
+            wrapper.classList.add('as-fade-out');
             wrapper.addEventListener('animationend', () => {
                 wrapper.remove();
                 if (mapInstance) { mapInstance.remove(); mapInstance = null; }
-                mapContainer = null;
-                txLayer = null;
+                mapContainer  = null;
+                txLayer       = null;
                 aircraftLayer = null;
-                lineLayer = null;
-                rxMarker = null;
-                _txElements = {};
-                _drMarkers = {};
+                lineLayer     = null;
+                rxMarker      = null;
+                _txElements   = {};
+                _drMarkers    = {};
                 _activeCompass = null;
-                _activeFreq = null;
-                _activeTxKey = null;
-                isFreqLocked = false;
+                _activeFreq    = null;
+                _activeTxKey   = null;
+                isFreqLocked    = false;
                 isCompassLocked = false;
-            }); 
+            });
         }
     }
 
     function addDrag(el, handle){
         let ox, oy, sl, st;
         handle.onmousedown = e => {
-            if(e.target.closest('button') || e.target.closest('input') || e.target.closest('#as-header-info') || e.target.closest('#as-help-btn')) return;
+            if(e.target.closest('button') || e.target.closest('input') ||
+               e.target.closest('#as-header-info') || e.target.closest('#as-help-btn')) return;
             e.preventDefault(); ox=e.clientX; oy=e.clientY; sl=el.offsetLeft; st=el.offsetTop;
-            document.onmousemove = me => { el.style.left = Math.max(0, Math.min(sl+me.clientX-ox, window.innerWidth-el.offsetWidth)) + 'px'; el.style.top  = Math.max(0, Math.min(st+me.clientY-oy, window.innerHeight-el.offsetHeight)) + 'px'; };
-            document.onmouseup = () => { localStorage.setItem('as_left', el.offsetLeft); localStorage.setItem('as_top', el.offsetTop); document.onmousemove = document.onmouseup = null; };
+            document.onmousemove = me => {
+                el.style.left = Math.max(0, Math.min(sl+me.clientX-ox, window.innerWidth -el.offsetWidth )) + 'px';
+                el.style.top  = Math.max(0, Math.min(st+me.clientY-oy, window.innerHeight-el.offsetHeight)) + 'px';
+            };
+            document.onmouseup = () => {
+                localStorage.setItem('as_left', el.offsetLeft);
+                localStorage.setItem('as_top',  el.offsetTop);
+                document.onmousemove = document.onmouseup = null;
+            };
         };
     }
 
@@ -2255,44 +2407,119 @@
         const resizer = document.getElementById('as-resizer');
         if(!resizer) return;
         resizer.addEventListener('mousedown', e => {
-            e.preventDefault(); const sx = e.clientX, sy = e.clientY, sw = mapContainer.offsetWidth, sh = wrapper.offsetHeight;
+            e.preventDefault();
+            const sx=e.clientX, sy=e.clientY, sw=mapContainer.offsetWidth, sh=wrapper.offsetHeight;
             document.onmousemove = me => {
-                const nw = Math.max(400, sw + me.clientX - sx), nh = Math.max(400, sh + me.clientY - sy);
-                wrapper.style.width = (nw + 250) + 'px'; mapContainer.style.width = nw + 'px'; wrapper.style.height = nh + 'px';
+                const nw = Math.max(400, sw + me.clientX - sx);
+                const nh = Math.max(400, sh + me.clientY - sy);
+                wrapper.style.width      = (nw + 290) + 'px';
+                mapContainer.style.width = nw + 'px';
+                wrapper.style.height     = nh + 'px';
                 document.getElementById('as-list-panel').style.height = nh + 'px';
                 if(mapInstance) mapInstance.invalidateSize();
                 resizeProfileCanvas(); redrawActiveProfile();
             };
-            document.onmouseup = () => { localStorage.setItem('as_width', mapContainer.offsetWidth); localStorage.setItem('as_height', wrapper.offsetHeight); document.onmousemove = document.onmouseup = null; };
+            document.onmouseup = () => {
+                localStorage.setItem('as_width',  mapContainer.offsetWidth);
+                localStorage.setItem('as_height', wrapper.offsetHeight);
+                document.onmousemove = document.onmouseup = null;
+            };
         });
     }
 
+    // ── Audio Stream Functions ────────────────────────────────────────────
+    let asAudioPlayer    = null;
+    let asCurrentStreamId = null;
+
+    window._asPlayStream = function(url) {
+        if (!asAudioPlayer) {
+            asAudioPlayer = document.createElement('audio');
+            asAudioPlayer.id       = 'as-livemap-player';
+            asAudioPlayer.autoplay = true;
+            asAudioPlayer.controls = false;
+            asAudioPlayer.style.display = 'none';
+            document.body.appendChild(asAudioPlayer);
+        }
+        asAudioPlayer.src = url;
+        asAudioPlayer.play().catch(() => {
+            if(typeof sendToast === 'function') sendToast('error', 'Play Stream', 'Audio playback failed', false, false);
+        });
+    };
+
+    window._asStopStream = function() {
+        if (asAudioPlayer) {
+            asAudioPlayer.pause();
+            asAudioPlayer.src = '';
+            asAudioPlayer.remove();
+            asAudioPlayer = null;
+        }
+        document.querySelectorAll('.as-stream-btn.fa-square').forEach(icon => {
+            icon.classList.remove('fa-square');
+            icon.classList.add('fa-play');
+            icon.style.color = '#4aaeff';
+        });
+        asCurrentStreamId = null;
+    };
+
+    window._asHandleStreamClick = async function(id, stationName, iconElement) {
+        if (asCurrentStreamId === id) { window._asStopStream(); return; }
+        window._asStopStream();
+        if(typeof sendToast === 'function') sendToast('info', 'Play Stream', `Loading stream for ${stationName}...`, false, false);
+
+        try {
+            const API_URL = `https://api.fmlist.org/152/fmdxGetStreamById.php?id=${id}&token=924924`;
+            const domain  = window.location.host;
+            const url     = proxyUrl(`${API_URL}&cb=${Date.now()}&domain=${domain}`);
+
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error(`API-Error ${resp.status}`);
+            const streams = await resp.json();
+
+            if (!Array.isArray(streams) || streams.length === 0) {
+                if(typeof sendToast === 'function') sendToast('warning important', 'Play Stream', 'No stream URL found!', false, false);
+                return;
+            }
+
+            const best = streams.reduce((a, b) => parseInt(b.bitrate) > parseInt(a.bitrate) ? b : a);
+            window._asPlayStream(best.linkname);
+            asCurrentStreamId = id;
+
+            if (iconElement) {
+                iconElement.classList.remove('fa-play');
+                iconElement.classList.add('fa-square');
+                iconElement.style.color = 'white';
+            }
+
+            if(typeof sendToast === 'function') sendToast('info important', 'Play Stream',
+                `<div style="max-width:150px;white-space:normal;word-break:break-all;">Playing: ${best.linkname}</div>`, false, false);
+        } catch (err) {
+            if(typeof sendToast === 'function') sendToast('error', 'Play Stream', 'Error loading stream data', false, false);
+        }
+    };
+
     function getRxCoords(){
         if(gpsLat&&gpsLon&&!isNaN(gpsLat)&&gpsLat!==0) return {lat:gpsLat,lon:gpsLon};
-        const lat=parseFloat(localStorage.getItem('qthLatitude')||'0'), lon=parseFloat(localStorage.getItem('qthLongitude')||'0');
+        const lat=parseFloat(localStorage.getItem('qthLatitude') ||'0');
+        const lon=parseFloat(localStorage.getItem('qthLongitude')||'0');
         if(!isNaN(lat)&&lat!==0&&!isNaN(lon)&&lon!==0) return {lat,lon};
         return null;
     }
-    
+
     let ipAddress = null;
 
     async function fetchIpAddress() {
-        const host = WebserverURL; 
-        if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host)) {
-            return host;
-        }
+        const host = WebserverURL;
+        if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host)) return host;
         try {
-            const dnsRes = await fetch(`https://dns.google/resolve?name=${host}&type=A`);
+            const dnsRes  = await fetch(`https://dns.google/resolve?name=${host}&type=A`);
             const dnsJson = await dnsRes.json();
             if (dnsJson.Answer && dnsJson.Answer.length) {
                 const aRecord = dnsJson.Answer.find(r => r.type === 1);
-                if (aRecord && aRecord.data) {
-                    return aRecord.data;
-                }
+                if (aRecord && aRecord.data) return aRecord.data;
             }
         } catch (e) {}
         try {
-            const res = await fetch('https://api.ipify.org?format=json');
+            const res  = await fetch('https://api.ipify.org?format=json');
             const json = await res.json();
             return json.ip;
         } catch (e) {}
@@ -2300,68 +2527,51 @@
     }
 
     function setupDataPluginsWebSocket(){
-        if(ws&&ws.readyState!==WebSocket.CLOSED) return;
-        try{
-            ws=new WebSocket(WEBSOCKET_URL);
+        if(ws && ws.readyState !== WebSocket.CLOSED) return;
+        try {
+            ws = new WebSocket(WEBSOCKET_URL);
             ws.addEventListener('open', async () => {
                 debugLog('DataPlugins WS opened. Fetching IP...');
-                if (!ipAddress) {
-                    ipAddress = await fetchIpAddress();
-                }
+                if (!ipAddress) ipAddress = await fetchIpAddress();
                 debugLog(`IP fetched: ${ipAddress}. Sending Rotor request...`);
-                // Send Rotor position request on connect
-                const requestPayload = JSON.stringify({
-                    type: 'Rotor',
-                    value: 'request',
-                    source: ipAddress,
-                    clientId: clientId
-                });
-                debugLog(`Sent payload: ${requestPayload}`);
-                ws.send(requestPayload);
+                ws.send(JSON.stringify({
+                    type: 'Rotor', value: 'request', source: ipAddress, clientId
+                }));
             });
-            
-            ws.addEventListener('message',evt=>{ 
+
+            ws.addEventListener('message', evt => {
                 try {
-                    const d=JSON.parse(evt.data);
-                    
-                    // GPS Parsing
-                    if(d.type==='GPS'&&d.value?.status==='active'){
-                        gpsLat=parseFloat(d.value.lat);
-                        gpsLon=parseFloat(d.value.lon);
+                    const d = JSON.parse(evt.data);
+
+                    if(d.type === 'GPS' && d.value?.status === 'active'){
+                        gpsLat = parseFloat(d.value.lat);
+                        gpsLon = parseFloat(d.value.lon);
                     }
-                    
-                    // Rotor Parsing
-                    if(d.type==='Rotor'){
-                        // 1. Read auth data (important for admin rights)
+
+                    if(d.type === 'Rotor'){
                         if (d.value === 'request' && d.clientId === clientId && d._auth) {
                             isAdminLoggedIn = d._auth.admin === true;
-                            isTuneLoggedIn = d._auth.tune === true;
+                            isTuneLoggedIn  = d._auth.tune  === true;
                             debugLog(`Auth updated: Admin=${isAdminLoggedIn}, Tune=${isTuneLoggedIn}`);
                         }
-                        
-                        // 2. Read lock status
-                        if (d.lock !== undefined) {
-                            isLockAuthenticated = d.lock;
-                        }
 
-                        // 3. Process real server responses from PST Rotator (127.0.0.1)
+                        if (d.lock !== undefined) isLockAuthenticated = d.lock;
+
                         if (d.value !== undefined && d.value !== 'request' && d.source === '127.0.0.1') {
                             const pos = parseFloat(d.value);
-                            
                             if(!isNaN(pos) && pos >= 0 && pos <= 360){
                                 lastRotorAzimuth = pos === 360 ? 0 : pos;
-                                
-                                // Show lock button and remove red X when real server data arrives
-                                const compassLockBtn = document.getElementById('as-compass-lock');
+
+                                const compassLockBtn  = document.getElementById('as-compass-lock');
                                 const compassClearBtn = document.getElementById('as-compass-clear');
-                                
+
                                 if (compassLockBtn && compassLockBtn.style.display === 'none') {
-                                    compassLockBtn.style.display = 'flex'; 
+                                    compassLockBtn.style.display = 'flex';
                                     if (compassClearBtn) compassClearBtn.style.display = 'none';
-                                    
-                                    // Re-render detail view if open, to make azimuth clickable
+
                                     if (_activeTxKey && document.getElementById('as-tx-detail-panel').style.display === 'flex') {
-                                        const txObj = Object.values(_persistentCrossings).flatMap(m=>Object.values(m)).find(c=>(c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq)===_activeTxKey)?.tx;
+                                        const txObj = Object.values(_persistentCrossings).flatMap(m=>Object.values(m))
+                                            .find(c=>(c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq)===_activeTxKey)?.tx;
                                         if(txObj) renderTxDetailsContent(_activeTxKey, txObj);
                                     }
                                 }
@@ -2375,112 +2585,103 @@
                             }
                         }
                     }
-                }catch(e){
+                } catch(e) {
                     debugLog('Error parsing WS message:', e);
-                } 
+                }
             });
-            
-            ws.addEventListener('close',() => {
+
+            ws.addEventListener('close', () => {
                 debugLog('DataPlugins WS closed. Reconnecting in 5s...');
-                setTimeout(setupDataPluginsWebSocket,5000);
+                setTimeout(setupDataPluginsWebSocket, 5000);
             });
-        }catch(e){
+        } catch(e) {
             debugLog('Error setting up DataPlugins WS:', e);
         }
     }
 
     function startCountdownTick(){
         if(countdownTimer) return;
-        countdownTimer=setInterval(()=>{
-            if(!mapActive||!mapInstance) return;
+        countdownTimer = setInterval(() => {
+            if(!mapActive || !mapInstance) return;
             redrawFiltered();
         }, COUNTDOWN_TICK_MS);
     }
 
-    // ── Data Fetching ────────────────────────────────────────────────────
-    const DB_CACHE_KEY='as_fmdx_db', DB_CACHE_TS='as_fmdx_ts', DB_CACHE_LOC='as_fmdx_loc';
+    // ── Data Fetching ─────────────────────────────────────────────────────
+    const DB_CACHE_KEY = 'as_fmdx_db';
+    const DB_CACHE_TS  = 'as_fmdx_ts';
+    const DB_CACHE_LOC = 'as_fmdx_loc';
 
     function isFmdxCacheValid(currentLat, currentLon) {
         const ts = parseInt(localStorage.getItem(DB_CACHE_TS) || '0');
-        if (Date.now() - ts > DB_CACHE_HOURS * 3600000) return false; 
-        
+        if (Date.now() - ts > DB_CACHE_HOURS * 3600000) return false;
         try {
             const locStr = localStorage.getItem(DB_CACHE_LOC);
             if (!locStr) return false;
             const loc = JSON.parse(locStr);
-            if (haversineKm(currentLat, currentLon, loc.lat, loc.lon) > 100) return false; 
-        } catch(e) {
-            return false;
-        }
+            if (loc.radius !== undefined && loc.radius !== S.txRadiusKm) return false;
+            if (haversineKm(currentLat, currentLon, loc.lat, loc.lon) > 100) return false;
+        } catch(e) { return false; }
         return true;
     }
 
     async function loadTxDatabase(lat, lon) {
         if (isFmdxCacheValid(lat, lon)) {
-            try { 
-                const raw = localStorage.getItem(DB_CACHE_KEY); 
-                if (raw) {
-                    await new Promise(r => setTimeout(r, 5)); // Short pause before the large JSON parse
-                    return JSON.parse(raw); 
-                }
+            try {
+                const raw = localStorage.getItem(DB_CACHE_KEY);
+                if (raw) { await new Promise(r => setTimeout(r, 5)); return JSON.parse(raw); }
             } catch(e) {}
         }
-        
+
         const directUrl = FMDX_API_BASE + '?qth=' + encodeURIComponent(lat + ',' + lon);
         let data = null;
         try { const r = await fetch(directUrl); if (r.ok) data = await r.json(); } catch(e) {}
-        
-        if (!data) { 
+
+        if (!data) {
             try {
-                const r = await fetch(corsAnywhereUrl + directUrl); 
-                if(!r.ok) throw new Error('HTTP '+r.status);
-                data = await r.json(); 
+                const r = await fetch(proxyUrl(directUrl));
+                if(!r.ok) throw new Error('HTTP ' + r.status);
+                data = await r.json();
             } catch(e) { throw new Error('TX DB Fetch failed'); }
         }
 
         const locs = data.locations || data;
         if (!locs || typeof locs !== 'object') throw new Error('Invalid TX DB format');
 
-        // Calculate bounding box limit (1 degree = approx. 111 km)
         const latDelta = S.txRadiusKm / 111.0;
         const lonDelta = S.txRadiusKm / Math.max(0.1, Math.abs(111.0 * Math.cos(lat * Math.PI / 180)));
 
-        const stations = []; 
-        const locIds = Object.keys(locs);
-        let lastYield = performance.now();
-        
+        const stations = [];
+        const locIds   = Object.keys(locs);
+        let lastYield  = performance.now();
+
         for (let i = 0; i < locIds.length; i++) {
-            // Time-based "breathing" instead of static counter
             if (performance.now() - lastYield > 10) {
-                await new Promise(r => setTimeout(r, 5)); 
+                await new Promise(r => setTimeout(r, 5));
                 lastYield = performance.now();
             }
-
-            const locId = locIds[i];
-            const loc = locs[locId]; 
+            const loc    = locs[locIds[i]];
             if (!loc || !Array.isArray(loc.stations)) continue;
-            
             const locLat = parseFloat(loc.lat), locLon = parseFloat(loc.lon);
-            
-            // SUPER-FAST pre-filter: Is the location roughly in the search rectangle?
             if (Math.abs(locLat - lat) > latDelta || Math.abs(locLon - lon) > lonDelta) continue;
-            
-            // Only now calculate the exact (compute-intensive) circular distance
             const dist = haversineKm(lat, lon, locLat, locLon);
             if (dist > S.txRadiusKm) continue;
-            
             loc.stations.forEach(st => {
                 const fMHz = parseFloat(st.freq), erp = parseFloat(st.erp);
                 if (fMHz < 87.5 || fMHz > 108.0 || isNaN(erp) || erp < S.minTxErpKw) return;
-                stations.push({ id: st.id, freq: fMHz, city: loc.name || '', itu: loc.itu || '', erp, lat: locLat, lon: locLon, dist: Math.round(dist), terrainM: 0, station: st.station||'', ps: st.ps||'', pol: st.pol||'' });
+                stations.push({
+                    id: st.id, freq: fMHz, city: loc.name||'', itu: loc.itu||'',
+                    erp, lat: locLat, lon: locLon, dist: Math.round(dist),
+                    terrainM: 0, station: st.station||'', ps: st.ps||'', pol: st.pol||''
+                });
             });
         }
-        
+
         try {
-            await new Promise(r => setTimeout(r, 5)); // Pause before saving in localStorage
-            localStorage.setItem(DB_CACHE_KEY, JSON.stringify(stations)); 
-            localStorage.setItem(DB_CACHE_TS, String(Date.now()));
-            localStorage.setItem(DB_CACHE_LOC, JSON.stringify({lat, lon}));
+            await new Promise(r => setTimeout(r, 5));
+            localStorage.setItem(DB_CACHE_KEY, JSON.stringify(stations));
+            localStorage.setItem(DB_CACHE_TS,  String(Date.now()));
+            localStorage.setItem(DB_CACHE_LOC, JSON.stringify({lat, lon, radius: S.txRadiusKm}));
         } catch(e) {
             console.warn('[Airplane Scatter] Not enough space to cache FMDX DB.');
         }
@@ -2491,103 +2692,173 @@
     const ADSB_SOURCES = [
         {
             name: 'adsb.one',
-            buildUrl: (lat, lon, km) => corsAnywhereUrl + 'https://api.adsb.one/v2/point/' + lat.toFixed(4) + '/' + lon.toFixed(4) + '/' + Math.min(Math.max(Math.round(km * 0.53996), 1), 250),
+            buildUrl: (lat, lon, km) => proxyUrl('https://api.adsb.one/v2/point/' + lat.toFixed(4) + '/' + lon.toFixed(4) + '/' + Math.min(Math.max(Math.round(km * 0.53996), 1), 250)),
             parse: d => d?.ac ? d.ac.filter(a => a.lat && a.lon && a.alt_baro !== 'ground').map(a => ({
-                icao24: (a.hex||'').toLowerCase(), callsign: (a.flight||a.r||'').trim(), lat: a.lat, lon: a.lon,
-                alt_ft: typeof a.alt_baro==='number'?a.alt_baro:(a.alt_geom||0), speed: a.gs||0, track: a.track!==undefined?a.track:null,
-                vspeed: a.baro_rate||a.geom_rate||null, category: a.category||'A3'
+                icao24: a.hex, lat: parseFloat(a.lat), lon: parseFloat(a.lon),
+                alt_ft: typeof a.alt_baro === 'number' ? a.alt_baro : (typeof a.alt_geom === 'number' ? a.alt_geom : 0),
+                speed: typeof a.gs === 'number' ? a.gs : 0,
+                track: typeof a.track === 'number' ? a.track : null,
+                vspeed: typeof a.baro_rate === 'number' ? a.baro_rate : 0,
+                callsign: (a.flight || a.hex || '').trim(),
+                type: a.t || null,
+                category: getCustomCategory(a.t) || a.category || null
             })) : []
         },
         {
             name: 'adsb.lol',
-            buildUrl: (lat, lon, km) => corsAnywhereUrl + 'https://api.adsb.lol/v2/point/' + lat.toFixed(4) + '/' + lon.toFixed(4) + '/' + Math.min(Math.max(Math.round(km * 0.53996), 1), 250),
+            buildUrl: (lat, lon, km) => proxyUrl('https://api.adsb.lol/v2/point/' + lat.toFixed(4) + '/' + lon.toFixed(4) + '/' + Math.min(Math.max(Math.round(km * 0.53996), 1), 250)),
             parse: d => d?.ac ? d.ac.filter(a => a.lat && a.lon && a.alt_baro !== 'ground').map(a => ({
-                icao24: (a.hex||'').toLowerCase(), callsign: (a.flight||a.r||'').trim(), lat: a.lat, lon: a.lon,
-                alt_ft: typeof a.alt_baro==='number'?a.alt_baro:(a.alt_geom||0), speed: a.gs||0, track: a.track!==undefined?a.track:null,
-                vspeed: a.baro_rate||a.geom_rate||null, category: a.category||'A3'
+                icao24: a.hex, lat: parseFloat(a.lat), lon: parseFloat(a.lon),
+                alt_ft: typeof a.alt_baro === 'number' ? a.alt_baro : (typeof a.alt_geom === 'number' ? a.alt_geom : 0),
+                speed: typeof a.gs === 'number' ? a.gs : 0,
+                track: typeof a.track === 'number' ? a.track : null,
+                vspeed: typeof a.baro_rate === 'number' ? a.baro_rate : 0,
+                callsign: (a.flight || a.hex || '').trim(),
+                type: a.t || null,
+                category: getCustomCategory(a.t) || a.category || null
             })) : []
         },
         {
             name: 'adsb.fi',
-            buildUrl: (lat, lon, km) => corsAnywhereUrl + 'https://api.adsb.fi/v2/point/' + lat.toFixed(4) + '/' + lon.toFixed(4) + '/' + Math.min(Math.max(Math.round(km * 0.53996), 1), 250),
+            buildUrl: (lat, lon, km) => proxyUrl('https://api.adsb.fi/v2/point/' + lat.toFixed(4) + '/' + lon.toFixed(4) + '/' + Math.min(Math.max(Math.round(km * 0.53996), 1), 250)),
             parse: d => d?.ac ? d.ac.filter(a => a.lat && a.lon && a.alt_baro !== 'ground').map(a => ({
-                icao24: (a.hex||'').toLowerCase(), callsign: (a.flight||a.r||'').trim(), lat: a.lat, lon: a.lon,
-                alt_ft: typeof a.alt_baro==='number'?a.alt_baro:(a.alt_geom||0), speed: a.gs||0, track: a.track!==undefined?a.track:null,
-                vspeed: a.baro_rate||a.geom_rate||null, category: a.category||'A3'
+                icao24: a.hex, lat: parseFloat(a.lat), lon: parseFloat(a.lon),
+                alt_ft: typeof a.alt_baro === 'number' ? a.alt_baro : (typeof a.alt_geom === 'number' ? a.alt_geom : 0),
+                speed: typeof a.gs === 'number' ? a.gs : 0,
+                track: typeof a.track === 'number' ? a.track : null,
+                vspeed: typeof a.baro_rate === 'number' ? a.baro_rate : 0,
+                callsign: (a.flight || a.hex || '').trim(),
+                type: a.t || null,
+                category: getCustomCategory(a.t) || a.category || null
             })) : []
         }
     ];
 
+    function getTilePoints(lat, lon, totalRadiusKm) {
+        const API_MAX_KM = 460;
+        const points = [{ lat, lon }];
+        if (totalRadiusKm <= API_MAX_KM) return points;
+        const offsetKm = 500;
+        [0, 60, 120, 180, 240, 300].forEach(brg => {
+            const rad  = brg * Math.PI / 180;
+            const dLat = (offsetKm / 6371) * Math.cos(rad) * (180 / Math.PI);
+            const dLon = (offsetKm / 6371) * Math.sin(rad) * (180 / Math.PI) / Math.cos(lat * Math.PI / 180);
+            points.push({ lat: lat + dLat, lon: lon + dLon });
+        });
+        return points;
+    }
+
     let _adsbSourceIndex = 0;
+
     async function fetchAircraft(lat, lon, radiusKm) {
         radiusKm = (radiusKm && !isNaN(radiusKm) && radiusKm > 0) ? radiusKm : 750;
-        for (let attempt = 0; attempt < ADSB_SOURCES.length; attempt++) {
-            const srcIdx = (_adsbSourceIndex + attempt) % ADSB_SOURCES.length;
-            const src = ADSB_SOURCES[srcIdx];
-            try {
-                const ctrl = new AbortController();
-                const tid = setTimeout(() => ctrl.abort(), 12000);
-                const resp = await fetch(src.buildUrl(lat, lon, radiusKm), { signal: ctrl.signal });
-                clearTimeout(tid);
-                if (!resp.ok) throw new Error('HTTP ' + resp.status);
-                const data = await resp.json();
-                const aircraft = src.parse(data);
-                _adsbSourceIndex = srcIdx; 
-                return aircraft;
-            } catch(err) {
-                console.warn('[Airplane Scatter] ADS-B Source Failed:', src.name, err.message);
+        const tilePoints  = getTilePoints(lat, lon, radiusKm);
+        const perTileKm   = 460;
+        const allAircraft = new Map();
+
+        // Helper function to sleep
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+        for (const point of tilePoints) {
+            for (let attempt = 0; attempt < ADSB_SOURCES.length; attempt++) {
+                const srcIdx = (_adsbSourceIndex + attempt) % ADSB_SOURCES.length;
+                const src    = ADSB_SOURCES[srcIdx];
+                try {
+                    const reqUrl = src.buildUrl(point.lat, point.lon, perTileKm);
+                    const ctrl   = new AbortController();
+                    const tid    = setTimeout(() => ctrl.abort(), 12000);
+                    const resp   = await fetch(reqUrl, { signal: ctrl.signal });
+                    clearTimeout(tid);
+                    
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    
+                    const data = src.parse(await resp.json());
+                    _adsbSourceIndex = srcIdx;
+                    data.forEach(ac => {
+                        if (!allAircraft.has(ac.icao24) &&
+                            haversineKm(lat, lon, ac.lat, ac.lon) <= radiusKm) {
+                            allAircraft.set(ac.icao24, ac);
+                        }
+                    });
+                    break; // Success, break out of the retry loop
+                } catch (err) {
+                    console.warn(`[Airplane Scatter] ADS-B Source Failed: ${src.name} | Error:`, err.message);
+                }
+            }
+            
+            // Add a 500ms delay between tile points to prevent bursting the API
+            if (tilePoints.length > 1) {
+                await sleep(500); 
             }
         }
-        throw new Error('All ADS-B APIs unavailable');
+
+        if (allAircraft.size === 0) throw new Error('All ADS-B APIs unavailable or rate limited');
+        return Array.from(allAircraft.values());
     }
 
     function ensureLeaflet(cb){
-        if(typeof L !== 'undefined' && leafletReady){cb();return;}
-        leafletCbs.push(cb); if(leafletCbs.length>1)return;
+        if(typeof L !== 'undefined' && leafletReady){ cb(); return; }
+        leafletCbs.push(cb);
+        if(leafletCbs.length > 1) return;
         if(!document.getElementById('as-leaflet-css')){
-            const lnk=document.createElement('link');lnk.id='as-leaflet-css';lnk.rel='stylesheet';
-            lnk.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';document.head.appendChild(lnk);
+            const lnk = document.createElement('link');
+            lnk.id = 'as-leaflet-css'; lnk.rel = 'stylesheet';
+            lnk.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+            document.head.appendChild(lnk);
         }
-        const scr=document.createElement('script');scr.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-        scr.onload=()=>{leafletReady=true; leafletCbs.forEach(fn=>fn()); leafletCbs=[];};
+        const scr = document.createElement('script');
+        scr.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+        scr.onload = () => { leafletReady = true; leafletCbs.forEach(fn => fn()); leafletCbs = []; };
         document.head.appendChild(scr);
     }
 
     async function startUpdate(forceReload){
-        const rx=getRxCoords(); if(!rx) return;
-        const reloadBtn=document.getElementById('as-reload');
-        if(reloadBtn)reloadBtn.classList.add('spinning');
+        const rx = getRxCoords(); if(!rx) return;
+        const reloadBtn = document.getElementById('as-reload');
+        if(reloadBtn) reloadBtn.classList.add('spinning');
         updateStatusText('⏳ Loading...', 0, 0, 0);
 
-        if(forceReload||_rxTerrainM===0){ 
-            _rxTerrainM=await fetchElevationSingle(rx.lat,rx.lon); 
-            _rxElevM=_rxTerrainM+S.rxAglM; 
-            
+        if(forceReload || _rxTerrainM === 0){
+            _rxTerrainM = await fetchElevationSingle(rx.lat, rx.lon);
+            _rxElevM    = _rxTerrainM + S.rxAglM;
             const rxTerrainUI = document.getElementById('as-rx-terrain-val');
             if(rxTerrainUI) rxTerrainUI.textContent = Math.round(_rxTerrainM);
         }
-        
+
         updateRxMarkerTooltip(rx);
 
         try {
             txStations = await loadTxDatabase(rx.lat, rx.lon);
+
+            const freqFilterList = await fetchFrequencyList(S.filterMode);
+            if (S.filterMode !== 'none' && freqFilterList.size > 0) {
+                txStations = txStations.filter(tx => {
+                    const txFreqRounded = Math.round(tx.freq * 100);
+                    if (S.filterMode === 'whitelist') return  freqFilterList.has(txFreqRounded);
+                    if (S.filterMode === 'blacklist') return !freqFilterList.has(txFreqRounded);
+                    return true;
+                });
+            }
+
             txStationGrid = await buildTxGridAsync(txStations);
-            updateRxMarkerTooltip(rx); 
+            updateRxMarkerTooltip(rx);
             enrichTxElevations(txStations).then(async () => {
                 txStationGrid = await buildTxGridAsync(txStations);
                 if(mapInstance) redrawFiltered();
             });
         } catch(e) {
-            updateStatusText('⚠ TX DB Error: '+e.message, 0, 0, 0);
-            if(reloadBtn)reloadBtn.classList.remove('spinning'); return;
+            updateStatusText('⚠ TX DB Error: ' + e.message, 0, 0, 0);
+            if(reloadBtn) reloadBtn.classList.remove('spinning');
+            return;
         }
 
         let fetchedAircraft = [];
         try {
-            fetchedAircraft=await fetchAircraft(rx.lat,rx.lon,S.aircraftRadiusKm);
+            fetchedAircraft = await fetchAircraft(rx.lat, rx.lon, S.aircraftRadiusKm);
         } catch(e) {
-            updateStatusText('⚠ ADS-B Error: '+e.message, 0, txStations.length, 0);
-            if(reloadBtn)reloadBtn.classList.remove('spinning'); return;
+            updateStatusText('⚠ ADS-B Error: ' + e.message, 0, txStations.length, 0);
+            if(reloadBtn) reloadBtn.classList.remove('spinning');
+            return;
         }
 
         const now = Date.now();
@@ -2595,41 +2866,43 @@
 
         const robustList = [];
         for(let icao in _activeAircraft) {
-            let ac = _activeAircraft[icao];
-            if(now - ac._lastSeen > AIRCRAFT_TIMEOUT_MS) { delete _activeAircraft[icao]; } 
-            else {
+            const ac = _activeAircraft[icao];
+            if(now - ac._lastSeen > AIRCRAFT_TIMEOUT_MS) {
+                delete _activeAircraft[icao];
+            } else {
                 const staleSec = (now - ac._lastSeen) / 1000;
                 if (staleSec > 1 && ac.track !== null && ac.speed > 0) {
                     const dr = deadReckon(ac.lat, ac.lon, ac.track, ac.speed, staleSec);
                     robustList.push({...ac, lat: dr.lat, lon: dr.lon});
-                } else { robustList.push(ac); }
+                } else {
+                    robustList.push(ac);
+                }
             }
         }
 
         await computePersistentCrossings(robustList, rx.lat, rx.lon);
-        _lastFetchTime=now;
+        _lastFetchTime = now;
 
-        ensureLeaflet(()=>{ if(mapInstance) redrawFiltered(); });
-        
-        let activeCandsCount = getPrimaryCrossings(getActiveVisibleCrossings()).length;
+        ensureLeaflet(() => { if(mapInstance) redrawFiltered(); });
+
+        const activeCandsCount = getPrimaryCrossings(getActiveVisibleCrossings()).length;
         updateStatusText(new Date().toTimeString().slice(0,8), robustList.length, txStations.length, activeCandsCount);
-        if(reloadBtn)reloadBtn.classList.remove('spinning');
+        if(reloadBtn) reloadBtn.classList.remove('spinning');
     }
 
     function createButton(){
         (function waitForPanel(){
-            const obs=new MutationObserver((_,o)=>{
-                if(typeof addIconToPluginPanel!=='function') return;
+            const obs = new MutationObserver((_, o) => {
+                if(typeof addIconToPluginPanel !== 'function') return;
                 o.disconnect();
-                // Add Plugin Version to Tooltip!
-                addIconToPluginPanel('AIRPLANESCATTER-on-off','Scatter','solid','plane',`Airplane Scatter v${pluginVersion}`);
-                const btnObs=new MutationObserver(()=>{
-                    const btn=document.getElementById('AIRPLANESCATTER-on-off');
-                    if(!btn) return; 
-                    btnObs.disconnect(); 
-                    btn.classList.add('hide-phone','bg-color-2');
-                    btn.title = `Airplane Scatter v${pluginVersion}`; // Make sure tooltip is set
-                    btn.addEventListener('click',()=>{
+                addIconToPluginPanel('AIRPLANESCATTER-on-off', 'Scatter', 'solid', 'plane', `Airplane Scatter v${pluginVersion}`);
+                const btnObs = new MutationObserver(() => {
+                    const btn = document.getElementById('AIRPLANESCATTER-on-off');
+                    if(!btn) return;
+                    btnObs.disconnect();
+                    btn.classList.add('hide-phone', 'bg-color-2');
+                    btn.title = `Airplane Scatter v${pluginVersion}`;
+                    btn.addEventListener('click', () => {
                         if (!mapActive) {
                             const rx = getRxCoords();
                             if (!rx) {
@@ -2646,31 +2919,27 @@
                         }
                     });
                 });
-                btnObs.observe(document.body,{childList:true,subtree:true});
+                btnObs.observe(document.body, {childList: true, subtree: true});
             });
-            obs.observe(document.body,{childList:true,subtree:true});
+            obs.observe(document.body, {childList: true, subtree: true});
         })();
     }
 
     function openMap(rxLat, rxLon){
         createMapContainer(rxLat, rxLon);
-        ensureLeaflet(()=>{
+        ensureLeaflet(() => {
             startUpdate(false);
             setupMainWebSocket();
             setupRdsWebSocket();
-            if(aircraftTimer)clearInterval(aircraftTimer);
-            aircraftTimer=setInterval(()=>{if(mapActive)startUpdate(false);},AIRCRAFT_UPDATE_MS);
+            if(aircraftTimer) clearInterval(aircraftTimer);
+            aircraftTimer = setInterval(() => { if(mapActive) startUpdate(false); }, AIRCRAFT_UPDATE_MS);
             startCountdownTick();
         });
     }
 
-    loadCountryLookup().then(map => {
-        ituToFlag = map;
-    }).catch(err => {
-        ituToFlag = {};
-    });
+    loadCountryLookup().then(map => { ituToFlag = map; }).catch(() => { ituToFlag = {}; });
 
-    setupDataPluginsWebSocket(); // Setup websocket for GPS and Rotor
+    setupDataPluginsWebSocket();
     createButton();
 
 })();
