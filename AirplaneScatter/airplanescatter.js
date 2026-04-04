@@ -976,7 +976,7 @@ else if (az >= 326.25 && az < 348.75) dirs = ['NW', 'N'];
 
                     if (_activeCompass && _activeCompass.length > 0) {
                         const brg = bearingDeg(rx.lat, rx.lon, cr.tx.lat, cr.tx.lon);
-                        const dirs = {N:[337.5,22.5], NO:[22.5,67.5], O:[67.5,112.5], SO:[112.5,157.5], S:[157.5,202.5], SW:[202.5,247.5], W:[247.5,292.5], NW:[292.5,337.5]};
+                        const dirs = {N:[337.5,22.5], NR:[22.5,67.5], O:[67.5,112.5], SE:[112.5,157.5], S:[157.5,202.5], SW:[202.5,247.5], W:[247.5,292.5], NW:[292.5,337.5]};
 
                         let isMatch = false;
                         for (let dir of _activeCompass) {
@@ -2672,14 +2672,14 @@ document.getElementById('as-settings-apply').addEventListener('click', () => {
                 <div id="as-compass" class="leaflet-control">
                     <button class="as-comp-btn" data-dir="NW">NW</button>
                     <button class="as-comp-btn" data-dir="N">N</button>
-                    <button class="as-comp-btn" data-dir="NO">NO</button>
+                    <button class="as-comp-btn" data-dir="NE">NE</button>
                     <button class="as-comp-btn" data-dir="W">W</button>
                     <button class="as-comp-btn as-comp-center" id="as-compass-clear" data-dir="ALL" style="display:${showLock?'none':'flex'};">✕</button>
                     <button class="as-comp-btn as-comp-center ${lockClass}" id="as-compass-lock" title="${lockTitle}" style="display:${showLock?'flex':'none'};">${lockIcon}</button>
-                    <button class="as-comp-btn" data-dir="O">O</button>
+                    <button class="as-comp-btn" data-dir="E">E</button>
                     <button class="as-comp-btn" data-dir="SW">SW</button>
                     <button class="as-comp-btn" data-dir="S">S</button>
-                    <button class="as-comp-btn" data-dir="SO">SO</button>
+                    <button class="as-comp-btn" data-dir="SE">SE</button>
                 </div>
 
                 <div id="as-freq-filter" class="leaflet-control">
