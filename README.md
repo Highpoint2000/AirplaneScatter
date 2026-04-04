@@ -25,8 +25,10 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 4. Start/Restart the fm-dx-webserver with "npm run webserver" on node.js console, check the console informations
 5. Activate the sysinfo plugin in the settings
 6. Stop or close the fm-dx-webserver
-7. Start/Restart the fm-dx-webserver with "npm run webserver" on node.js console, check the console informations 
-8. Reload the browser
+7. Start/Restart the fm-dx-webserver with "npm run webserver" on node.js console, check the console informations (for patching tx_search.js)
+8. Stop or close the fm-dx-webserver
+9. Start/Restart the fm-dx-webserver with "npm run webserver" on node.js console, check the console informations 
+10. Reload the browser
 
 ## How to use
                                          
