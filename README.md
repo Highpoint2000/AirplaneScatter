@@ -2,13 +2,13 @@
 Predicts and visualizes real-time airplane scatter opportunities for FM radio reception by combining live ADS-B flight tracking with transmitter databases and elevation profiles.
 
 <img width="2000" height="836" alt="grafik" src="https://github.com/user-attachments/assets/72607b3a-b034-40a6-ae90-551c11e016bd" />
-<img width="500" height="460" alt="grafik" src="https://github.com/user-attachments/assets/48c731e7-f2ab-442f-a9d1-4b32bcc5572c" />
-<img width="322" height="4460" alt="grafik" src="https://github.com/user-attachments/assets/59e1bb3d-b202-4b7d-958d-3106a321d547" />
+<img width="500" height="460" alt="grafik" src="https://github.com/user-attachments/assets/4c24cf61-60cf-43ca-954e-55868b6344b7" />
+<img width="310" height="440" alt="grafik" src="https://github.com/user-attachments/assets/59e1bb3d-b202-4b7d-958d-3106a321d547" />
 
 ## Version 2.1 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 
 - The TX data from maps.fmdx.org is now loaded directly from RAM, taking over the DB download from tx_search.js
-- Sweet Spot label position — moved label +14px downward so it appears below the midpoint of the green band instead of on top of it
+- Sweet Spot indicates the optimal altitude range in which an aircraft must be for Airplane Scatter to function ideally simultaneously from both TX and RX
 - Problem during ERP migration resolved
 - Elevation profile hover tooltip — new function initProfileCanvasHover() added; shows on mouse-over of the elevation canvas:
   + Distance from RX / TX at cursor position
