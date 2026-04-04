@@ -934,22 +934,22 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
         const az = lastRotorAzimuth;
         let dirs = [];
 
-        if (az >= 348.75 || az < 11.25) dirs = ['N'];
-        else if (az >= 11.25 && az < 33.75) dirs = ['N', 'NO'];
-        else if (az >= 33.75 && az < 56.25) dirs = ['NO'];
-        else if (az >= 56.25 && az < 78.75) dirs = ['NO', 'O'];
-        else if (az >= 78.75 && az < 101.25) dirs = ['O'];
-        else if (az >= 101.25 && az < 123.75) dirs = ['O', 'SO'];
-        else if (az >= 123.75 && az < 146.25) dirs = ['SO'];
-        else if (az >= 146.25 && az < 168.75) dirs = ['SO', 'S'];
-        else if (az >= 168.75 && az < 191.25) dirs = ['S'];
-        else if (az >= 191.25 && az < 213.75) dirs = ['S', 'SW'];
-        else if (az >= 213.75 && az < 236.25) dirs = ['SW'];
-        else if (az >= 236.25 && az < 258.75) dirs = ['SW', 'W'];
-        else if (az >= 258.75 && az < 281.25) dirs = ['W'];
-        else if (az >= 281.25 && az < 303.75) dirs = ['W', 'NW'];
-        else if (az >= 303.75 && az < 326.25) dirs = ['NW'];
-        else if (az >= 326.25 && az < 348.75) dirs = ['NW', 'N'];
+if (az >= 348.75 || az < 11.25) dirs = ['N'];
+else if (az >= 11.25 && az < 33.75) dirs = ['N', 'NE'];
+else if (az >= 33.75 && az < 56.25) dirs = ['NE'];
+else if (az >= 56.25 && az < 78.75) dirs = ['NE', 'E'];
+else if (az >= 78.75 && az < 101.25) dirs = ['E'];
+else if (az >= 101.25 && az < 123.75) dirs = ['E', 'SE'];
+else if (az >= 123.75 && az < 146.25) dirs = ['SE'];
+else if (az >= 146.25 && az < 168.75) dirs = ['SE', 'S'];
+else if (az >= 168.75 && az < 191.25) dirs = ['S'];
+else if (az >= 191.25 && az < 213.75) dirs = ['S', 'SW'];
+else if (az >= 213.75 && az < 236.25) dirs = ['SW'];
+else if (az >= 236.25 && az < 258.75) dirs = ['SW', 'W'];
+else if (az >= 258.75 && az < 281.25) dirs = ['W'];
+else if (az >= 281.25 && az < 303.75) dirs = ['W', 'NW'];
+else if (az >= 303.75 && az < 326.25) dirs = ['NW'];
+else if (az >= 326.25 && az < 348.75) dirs = ['NW', 'N'];
 
         _activeCompass = dirs;
         updateCompassUI();
