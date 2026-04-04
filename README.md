@@ -5,16 +5,17 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 <img width="500" height="460" alt="grafik" src="https://github.com/user-attachments/assets/48c731e7-f2ab-442f-a9d1-4b32bcc5572c" />
 <img width="322" height="4460" alt="grafik" src="https://github.com/user-attachments/assets/59e1bb3d-b202-4b7d-958d-3106a321d547" />
 
+## Version 2.1 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 
-
-## Version 2.0 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
-
-- Local Node Proxy Server (airplanescatter_server.js) — replaces the unreliable public CORS proxy with a dedicated backend that runs inside FM-DX-Webserver
-- Audio Stream Integration — Play/Stop buttons in the TX detail panel stream live web radio directly in the browser 
-- Aircraft Category Filter — new setting to exclude smaller aircraft objects 
-- Frequency Blacklist / Whitelist — static blacklist.txt / whitelist.txt files can be loaded to suppress or exclusively show specific frequencies
-- The fetch radius (TX & aircraft) is extended to up to 1000 km
-- The purple coverage area between RX and TX is now also displayed in the map line
+- The TX data from maps.fmdx.org is now loaded directly from RAM, taking over the DB download from tx_search.js
+- Sweet Spot label position — moved label +14px downward so it appears below the midpoint of the green band instead of on top of it
+- Problem during ERP migration resolved
+- Elevation profile hover tooltip — new function initProfileCanvasHover() added; shows on mouse-over of the elevation canvas:
+  + Distance from RX / TX at cursor position
+  + Terrain height at cursor (interpolated)
+  + Elevation angle from RX to terrain at cursor (red)
+  + Elevation angle from TX to terrain at cursor (yellow)
+  + Per-aircraft elevation angles from RX and TX (if aircraft is within ±30 km of cursor)
 
 ## Installation notes
 
@@ -47,6 +48,15 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### Version 2.0 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
+
+- Local Node Proxy Server (airplanescatter_server.js) — replaces the unreliable public CORS proxy with a dedicated backend that runs inside FM-DX-Webserver
+- Audio Stream Integration — Play/Stop buttons in the TX detail panel stream live web radio directly in the browser 
+- Aircraft Category Filter — new setting to exclude smaller aircraft objects 
+- Frequency Blacklist / Whitelist — static blacklist.txt / whitelist.txt files can be loaded to suppress or exclusively show specific frequencies
+- The fetch radius (TX & aircraft) is extended to up to 1000 km
+- The purple coverage area between RX and TX is now also displayed in the map line
 
 ### Version 1.1
 

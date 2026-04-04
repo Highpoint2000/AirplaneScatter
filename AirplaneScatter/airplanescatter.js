@@ -1,17 +1,17 @@
-////////////////////////////////////////////////////////////////
-//                                                            //
-//  AIRPLANE SCATTER CLIENT PLUGIN FOR FM-DX-WEBSERVER (V2.0) //
-//                                                            //
-//  by Highpoint                last update: 2026-04-03       //
-//                                                            //
-//  https://github.com/Highpoint2000/AirplaneScatter          //
-//                                                            //
-////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////
+//                                                             //
+//  AIRPLANE SCATTER CLIENT PLUGIN FOR FM-DX-WEBSERVER (V2.1)  //
+//                                                             //
+//  by Highpoint                last update: 2026-04-03        //
+//                                                             //
+//  https://github.com/Highpoint2000/AirplaneScatter           //
+//                                                             //
+/////////////////////////////////////////////////////////////////
 
 (() => {
 
     // ── Plugin metadata & Update Check ────────────────────────────────────
-    const pluginVersion     = "2.0";
+    const pluginVersion     = "2.1";
     const pluginName        = "Airplane Scatter";
     const pluginHomepageUrl = "https://github.com/highpoint2000/AirplaneScatter/releases";
     const pluginUpdateUrl   = "https://raw.githubusercontent.com/Highpoint2000/AirplaneScatter/refs/heads/main/AirplaneScatter/airplanescatter.js";
@@ -1216,6 +1216,68 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
         drawProfile(matchingCrs, _currentPathElevs, rx, _activeProfileTxObj);
     }
 
+    // ── Compute the "sweet spot" corridor for ideal airplane scatter ───────
+    // Based on kkonrad's expert advice:
+    //   RX side : plane must be AT MOST ~5° elevation from RX
+    //             → ceiling from RX: rxAltM + x_km * 1000 * tan(5°)
+    //   TX side : plane must be AT MOST ~1° elevation from TX (just above horizon)
+    //             → ceiling from TX: txAltM + d_tx_km * 1000 * tan(1°)
+    //
+    // The sweet spot = altitude band between:
+    //   floor   = max(hrx_arr[i], htx_arr[i])  ← purple zone top (must be visible from both)
+    //   ceiling = min(rxAngleCeil, txAngleCeil) ← must be LOW from both sides
+    //
+    // The plane must be INSIDE the purple zone (above floor) AND
+    // below both angle ceilings (not too high in elevation from either end).
+    function computeSweetSpotCorridor(elevs, d_txrx, rxAltM, txAltM, hrx_arr, htx_arr) {
+        if (!elevs || elevs.length < 2 || !hrx_arr || !htx_arr) return [];
+
+        const stepKm     = d_txrx / (elevs.length - 1);
+        const DEG_TO_RAD = Math.PI / 180;
+
+        // kkonrad: RX sees plane at ≤ 5°, TX sees plane at ≤ 1°
+        const RX_ANGLE_DEG = 5.0;
+        const TX_ANGLE_DEG = 1.0;
+
+        const tanRx = Math.tan(RX_ANGLE_DEG * DEG_TO_RAD);
+        const tanTx = Math.tan(TX_ANGLE_DEG * DEG_TO_RAD);
+
+        const corridor = [];
+
+        for (let i = 1; i < elevs.length - 1; i++) {
+            const x    = i * stepKm;    // distance from RX [km]
+            const d_tx = d_txrx - x;   // distance from TX [km]
+
+            if (x < 1 || d_tx < 1) continue;
+
+            // ── Purple zone floor: plane must be visible from both ends ────
+            const sweetFloor = Math.max(hrx_arr[i], htx_arr[i]);
+
+            // ── Angle ceilings measured from the actual endpoint altitudes ─
+            // NOT from the running envelope – that was the bug before
+            const rxAngleCeil = rxAltM + x    * 1000 * tanRx;   // ≤5° from RX
+            const txAngleCeil = txAltM + d_tx * 1000 * tanTx;   // ≤1° from TX
+
+            // Sweet spot ceiling = lower of the two angle lines
+            const sweetCeil = Math.min(rxAngleCeil, txAngleCeil);
+
+            // No sweet spot if ceiling is at or below floor
+            if (sweetCeil <= sweetFloor) continue;
+
+            // Must be above terrain
+            const terrainHere = elevs[i];
+            if (sweetCeil < terrainHere) continue;
+
+            corridor.push({
+                x,
+                minH: Math.max(sweetFloor, terrainHere),
+                maxH: sweetCeil
+            });
+        }
+
+        return corridor;
+    }
+
     function drawProfile(cands, elevs, rx, tx) {
         const canvas = document.getElementById('as-profile-canvas');
         if(!canvas) return;
@@ -1303,8 +1365,9 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
 
         const scaleX = drawW / (profMaxX - profMinX), scaleY = drawH / (maxH - minH);
         const mapX = xKm => padL + (xKm - profMinX) * scaleX;
-        const mapY = zM => h - padB - (zM - minH) * scaleY;
+        const mapY = zM  => h - padB - (zM - minH) * scaleY;
 
+        // ── Y-axis labels & grid lines ────────────────────────────────────
         ctx.fillStyle = '#668'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
         for (let i = 0; i <= 4; i++) {
             const levelM = minH + (maxH - minH) * (i / 4);
@@ -1316,11 +1379,13 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
 
         ctx.save(); ctx.beginPath(); ctx.rect(padL, padT, drawW, drawH); ctx.clip();
 
+        // ── Determine highest plane for purple region clip ─────────────────
         let highestPlaneM = 12000;
         if (planeData.length > 0) {
             highestPlaneM = Math.max(12000, Math.max(...planeData.map(p => p.acAltM)) + 1000);
         }
 
+        // ── Purple visibility zone (existing) ─────────────────────────────
         ctx.save();
         ctx.beginPath();
         ctx.rect(padL, mapY(highestPlaneM), drawW, (h - padB) - mapY(highestPlaneM));
@@ -1340,19 +1405,98 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
         }
         ctx.restore();
 
+        // ── RX horizon line (red) ─────────────────────────────────────────
         ctx.beginPath();
         losFloor.forEach((pt, i) => i === 0 ? ctx.moveTo(mapX(pt.x), mapY(pt.hrx)) : ctx.lineTo(mapX(pt.x), mapY(pt.hrx)));
         ctx.strokeStyle = 'rgba(255, 50, 50, 0.8)'; ctx.lineWidth = 1.5; ctx.stroke();
 
+        // ── TX horizon line (yellow) ──────────────────────────────────────
         ctx.beginPath();
         losFloor.forEach((pt, i) => i === 0 ? ctx.moveTo(mapX(pt.x), mapY(pt.htx)) : ctx.lineTo(mapX(pt.x), mapY(pt.htx)));
         ctx.strokeStyle = 'rgba(255, 200, 50, 0.8)'; ctx.lineWidth = 1.5; ctx.stroke();
 
+        // ── Sweet spot corridor ────────────────────────────────────────────
+        // Highlight the altitude band where the plane achieves the ideal
+        // elevation angles simultaneously at both TX (0–1°) and RX (4–5°).
+        // Drawn as a filled semi-transparent green band + upper/lower boundaries.
+               // ── Draw sweet spot corridor (green, inside purple zone) ──────────
+        const sweetSpot = computeSweetSpotCorridor(elevs, d_txrx, rxAltM, txAltM, hrx_arr, htx_arr);
+
+        if (sweetSpot.length > 1) {
+            // Draw as filled polygon: top edge (maxH), then bottom edge (minH) reversed
+            ctx.save();
+            ctx.beginPath();
+            // Top edge (left to right)
+            let started = false;
+            for (let k = 0; k < sweetSpot.length; k++) {
+                const pt = sweetSpot[k];
+                const cx = mapX(pt.x);
+                const cy = mapY(pt.maxH);
+                if (cx < padL || cx > w - padR) continue;
+                if (!started) { ctx.moveTo(cx, cy); started = true; }
+                else ctx.lineTo(cx, cy);
+            }
+            // Bottom edge (right to left)
+            for (let k = sweetSpot.length - 1; k >= 0; k--) {
+                const pt = sweetSpot[k];
+                const cx = mapX(pt.x);
+                const cy = mapY(pt.minH);
+                if (cx < padL || cx > w - padR) continue;
+                ctx.lineTo(cx, cy);
+            }
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(0, 255, 80, 0.35)';
+            ctx.fill();
+
+            // Top border line (RX 4° / TX 1° ceiling)
+            ctx.beginPath();
+            started = false;
+            for (let k = 0; k < sweetSpot.length; k++) {
+                const pt = sweetSpot[k];
+                const cx = mapX(pt.x);
+                const cy = mapY(pt.maxH);
+                if (cx < padL || cx > w - padR) continue;
+                if (!started) { ctx.moveTo(cx, cy); started = true; }
+                else ctx.lineTo(cx, cy);
+            }
+            ctx.strokeStyle = 'rgba(0, 255, 80, 0.9)';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([4, 3]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+
+            // ── "Sweet Spot" label ────────────────────────────────────────
+            // Place it at the point with the widest band (most room)
+            let bestBand = -1, bestIdx = -1;
+            for (let k = 0; k < sweetSpot.length; k++) {
+                const band = sweetSpot[k].maxH - sweetSpot[k].minH;
+                if (band > bestBand) { bestBand = band; bestIdx = k; }
+            }
+            if (bestIdx >= 0) {
+                const pt  = sweetSpot[bestIdx];
+                const lx  = mapX(pt.x);
+                const ly  = mapY((pt.minH + pt.maxH) / 2) + 14;
+                if (lx >= padL && lx <= w - padR) {
+                    ctx.save();
+                    ctx.font      = 'bold 11px sans-serif';
+                    ctx.fillStyle = '#00ff50';
+                    ctx.textAlign = 'center';
+                    ctx.shadowColor = 'rgba(0,0,0,0.8)';
+                    ctx.shadowBlur  = 4;
+                    ctx.fillText('★ Sweet Spot', lx, ly);
+                    ctx.restore();
+                }
+            }
+        }
+
+        // ── Terrain fill ──────────────────────────────────────────────────
         ctx.beginPath(); ctx.moveTo(mapX(0), h - padB);
         for(let i=0; i<elevs.length; i++) ctx.lineTo(mapX(i * stepKm), mapY(elevs[i]));
         ctx.lineTo(mapX(d_txrx), h - padB); ctx.closePath();
         ctx.fillStyle = '#1e3050'; ctx.fill(); ctx.strokeStyle = '#2a4a7a'; ctx.lineWidth = 2; ctx.stroke();
 
+        // ── Aircraft dots & labels ────────────────────────────────────────
         const drawnLabels = [];
 
         planeData.forEach(p => {
@@ -1394,18 +1538,20 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
             ctx.fillText(labelStr, textX, textY);
         });
 
+        // ── RX / TX antenna stubs ─────────────────────────────────────────
         ctx.strokeStyle = '#668'; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.moveTo(mapX(0), mapY(elevs[0])); ctx.lineTo(mapX(0), mapY(rxAltM)); ctx.stroke();
         ctx.beginPath(); ctx.moveTo(mapX(d_txrx), mapY(elevs[elevs.length-1])); ctx.lineTo(mapX(d_txrx), mapY(txAltM)); ctx.stroke();
 
         ctx.restore();
 
+        // ── X-axis distance ticks ─────────────────────────────────────────
         ctx.fillStyle = '#668';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        const isMetric = S.useMetric;
-        const distConv = isMetric ? 1 : 0.621371;
+        const isMetric  = S.useMetric;
+        const distConv  = isMetric ? 1 : 0.621371;
         const viewDistDisp = (profMaxX - profMinX) * distConv;
 
         let tickStep = 10;
@@ -1415,11 +1561,11 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
         else if (viewDistDisp > 100) tickStep = 25;
 
         const startDisp = Math.ceil((profMinX * distConv) / tickStep) * tickStep;
-        const endDisp = Math.floor((profMaxX * distConv) / tickStep) * tickStep;
-        const unitStr = isMetric ? ' km' : ' mi';
+        const endDisp   = Math.floor((profMaxX * distConv) / tickStep) * tickStep;
+        const unitStr   = isMetric ? ' km' : ' mi';
 
         for (let d = startDisp; d <= endDisp; d += tickStep) {
-            const xKm = d / distConv;
+            const xKm    = d / distConv;
             const screenX = mapX(xKm);
             if (screenX > padL + 30 && screenX < (w - padR) - 30) {
                 ctx.fillText(d + unitStr, screenX, h - padB + 12);
@@ -1428,9 +1574,169 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
             }
         }
 
-        if (profMinX <= 0) { ctx.fillStyle = '#adf'; ctx.textAlign = 'center'; ctx.fillText('RX', mapX(0), h - padB + 12); }
+        if (profMinX <= 0)      { ctx.fillStyle = '#adf'; ctx.textAlign = 'center'; ctx.fillText('RX', mapX(0),       h - padB + 12); }
         if (profMaxX >= d_txrx) { ctx.fillStyle = '#adf'; ctx.textAlign = 'center'; ctx.fillText('TX', mapX(d_txrx), h - padB + 12); }
     }
+	
+	function initProfileCanvasHover() {
+    const canvas = document.getElementById('as-profile-canvas');
+    if (!canvas) return;
+
+    let _hoverTooltip = null;
+
+    canvas.addEventListener('mousemove', (e) => {
+        if (!_activeProfileTxKey || !_activeProfileTxObj || !_currentPathElevs || _currentPathElevs.length === 0) return;
+
+        const rx = getRxCoords();
+        if (!rx) return;
+
+        const tx       = _activeProfileTxObj;
+        const d_txrx   = haversineKm(tx.lat, tx.lon, rx.lat, rx.lon);
+        const elevs    = _currentPathElevs;
+
+        const rect  = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        const w = canvas.width, h = canvas.height;
+        const padT = 35, padB = 25, padL = 45, padR = 35;
+        const drawW = w - padL - padR;
+        const drawH = h - padT - padB;
+
+        // Only respond inside the plot area
+        if (mouseX < padL || mouseX > w - padR || mouseY < padT || mouseY > h - padB) {
+            if (_hoverTooltip) { _hoverTooltip.remove(); _hoverTooltip = null; }
+            return;
+        }
+
+        // Convert mouse X → distance in km along the path
+        const range   = profMaxX - profMinX;
+        const xKm     = profMinX + ((mouseX - padL) / drawW) * range;
+        if (xKm < 0 || xKm > d_txrx) {
+            if (_hoverTooltip) { _hoverTooltip.remove(); _hoverTooltip = null; }
+            return;
+        }
+
+        // Interpolate terrain elevation at cursor position
+        const stepKm   = d_txrx / (elevs.length - 1);
+        const rawIdx   = xKm / stepKm;
+        const idxLo    = Math.max(0, Math.floor(rawIdx));
+        const idxHi    = Math.min(elevs.length - 1, idxLo + 1);
+        const frac     = rawIdx - idxLo;
+        const terrainM = elevs[idxLo] * (1 - frac) + elevs[idxHi] * frac;
+
+        // Endpoint altitudes
+        const txAltM = (tx.terrainM || 0) + TX_HEIGHT_DEFAULT_M;
+        const rxAltM = _rxElevM;
+
+        // Distance from each end
+        const d_rx = xKm;            // distance from RX [km]
+        const d_tx = d_txrx - xKm;  // distance from TX [km]
+
+        // Elevation angles (in degrees) from each endpoint to the terrain point at cursor
+        // Positive = above horizon, negative = below
+        const elevAngleFromRx = d_rx > 0
+            ? toDeg(Math.atan2(terrainM - rxAltM, d_rx * 1000))
+            : 0;
+        const elevAngleFromTx = d_tx > 0
+            ? toDeg(Math.atan2(terrainM - txAltM, d_tx * 1000))
+            : 0;
+
+        // Also compute angle to any aircraft currently drawn near cursor X
+        const allVisible = getActiveVisibleCrossings();
+        const matchingCrs = allVisible.filter(c =>
+            (c.tx.lat + '_' + c.tx.lon + '_' + c.tx.freq) === _activeProfileTxKey
+        );
+
+        let acLines = '';
+        matchingCrs.forEach(cr => {
+            let drLat = cr.ac.lat, drLon = cr.ac.lon;
+            if (cr.ac.track !== null && cr.ac.speed > 0) {
+                const p = deadReckon(cr.ac.lat, cr.ac.lon, cr.ac.track, cr.ac.speed, cr.elapsed);
+                drLat = p.lat; drLon = p.lon;
+            }
+            const { alongTrackKm } = crossAlongTrack(rx.lat, rx.lon, tx.lat, tx.lon, drLat, drLon);
+            const acAltM = (cr.ac.alt_ft || 0) * 0.3048;
+
+            // Only show if aircraft is within ±30 km of cursor
+            if (Math.abs(alongTrackKm - xKm) > 30) return;
+
+            const dAcRx = alongTrackKm;
+            const dAcTx = d_txrx - alongTrackKm;
+
+            const acElRx = dAcRx > 0 ? toDeg(Math.atan2(acAltM - rxAltM, dAcRx * 1000)) : 0;
+            const acElTx = dAcTx > 0 ? toDeg(Math.atan2(acAltM - txAltM, dAcTx * 1000)) : 0;
+
+            const cs = (cr.ac.callsign || cr.ac.icao24).toUpperCase();
+            acLines += `
+                <tr><td colspan="2" style="color:#ffcc00;padding-top:5px;font-weight:bold;">✈ ${cs}</td></tr>
+                <tr>
+                    <td style="color:#889;">El. from RX</td>
+                    <td style="color:#5af;text-align:right;">${acElRx.toFixed(2)}°</td>
+                </tr>
+                <tr>
+                    <td style="color:#889;">El. from TX</td>
+                    <td style="color:#fa0;text-align:right;">${acElTx.toFixed(2)}°</td>
+                </tr>`;
+        });
+
+        const distDisp = S.useMetric
+            ? xKm.toFixed(1) + ' km'
+            : (xKm * 0.621371).toFixed(1) + ' mi';
+
+        const html = `
+            <div style="
+                position:fixed;
+                left:${e.clientX + 14}px;
+                top:${e.clientY - 10}px;
+                z-index:99999;
+                background:rgba(13,20,32,0.97);
+                border:1px solid #2a4a7a;
+                border-radius:6px;
+                padding:8px 12px;
+                font-size:11px;
+                color:#cde;
+                pointer-events:none;
+                box-shadow:0 4px 16px rgba(0,0,0,0.7);
+                min-width:160px;
+            ">
+                <table style="border-collapse:collapse;width:100%;">
+                    <tr>
+                        <td style="color:#889;">Distance (RX)</td>
+                        <td style="color:#fff;text-align:right;">${distDisp}</td>
+                    </tr>
+                    <tr>
+                        <td style="color:#889;">Distance (TX)</td>
+                        <td style="color:#fff;text-align:right;">${S.useMetric ? d_tx.toFixed(1) + ' km' : (d_tx * 0.621371).toFixed(1) + ' mi'}</td>
+                    </tr>
+                    <tr>
+                        <td style="color:#889;">Terrain</td>
+                        <td style="color:#fff;text-align:right;">${Math.round(terrainM)} m</td>
+                    </tr>
+                    <tr><td colspan="2" style="border-top:1px solid #2a4a7a;padding-top:4px;"></td></tr>
+                    <tr>
+                        <td style="color:#889;">El. angle (RX)</td>
+                        <td style="color:#f55;text-align:right;">${elevAngleFromRx.toFixed(2)}°</td>
+                    </tr>
+                    <tr>
+                        <td style="color:#889;">El. angle (TX)</td>
+                        <td style="color:#fc0;text-align:right;">${elevAngleFromTx.toFixed(2)}°</td>
+                    </tr>
+                    ${acLines}
+                </table>
+            </div>`;
+
+        if (!_hoverTooltip) {
+            _hoverTooltip = document.createElement('div');
+            document.body.appendChild(_hoverTooltip);
+        }
+        _hoverTooltip.innerHTML = html;
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+        if (_hoverTooltip) { _hoverTooltip.remove(); _hoverTooltip = null; }
+    });
+}
 
     // ── Map Drawing ────────────────────────────────────────��──────────────
     function drawStaticLayers(crossings, rxLat, rxLon){
@@ -1659,6 +1965,12 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
         document.getElementById('as-list-header').style.display = 'none';
         document.getElementById('as-list-body').style.display = 'none';
 
+        // NEU: Alten Trichter entfernen, wenn ein NEUER Sender angeklickt wird
+        if (window._asBeamLayers && mapInstance) {
+            mapInstance.removeLayer(window._asBeamLayers);
+            window._asBeamLayers = null;
+        }
+
         const dp = document.getElementById('as-tx-detail-panel');
         dp.style.display = 'flex';
         renderTxDetailsContent(txKey, tx);
@@ -1694,7 +2006,7 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
         }
     }
 
-    function hideTxDetails() {
+	function hideTxDetails() {
         document.getElementById('as-tx-detail-panel').style.display = 'none';
         document.getElementById('as-list-header').style.display = 'flex';
         document.getElementById('as-list-body').style.display = 'block';
@@ -1704,9 +2016,192 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
         _activeTxKey = null;
         updateCompassUI();
 
+        // NEU: Trichter von der Karte entfernen, wenn Panel geschlossen wird
+        if (window._asBeamLayers && mapInstance) {
+            mapInstance.removeLayer(window._asBeamLayers);
+            window._asBeamLayers = null;
+        }
+
         if(mapInstance) mapInstance.invalidateSize();
         redrawFiltered();
     }
+	
+    // ── FMSCAN Data Fetcher ───────────────────────────────────────────────
+    window._asFetchFmscan = async function(id, el, txLat, txLon, txErp) {
+        const tr = el.closest('tr');
+        let infoRow = tr.nextElementSibling;
+        
+        // Toggle (Schließen, falls schon offen)
+        if (infoRow && infoRow.classList.contains('fmscan-info-row')) {
+            infoRow.remove();
+            el.style.color = '#4aaeff';
+            
+            // Trichter von der Karte entfernen, wenn Info-Panel geschlossen wird
+            if (window._asBeamLayers && mapInstance) {
+                mapInstance.removeLayer(window._asBeamLayers);
+                window._asBeamLayers = null;
+            }
+            return;
+        }
+
+        el.style.color = '#fff';
+        el.className = 'fas fa-spinner fa-spin as-stream-btn'; // Lade-Icon
+        
+        // Trichter von vorherigen Klicks aufräumen
+        if (window._asBeamLayers && mapInstance) {
+            mapInstance.removeLayer(window._asBeamLayers);
+            window._asBeamLayers = null;
+        }
+        
+        try {
+            const url = proxyUrl('https://fmscan.org/info.php?i=' + id);
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('FMSCAN fetch failed');
+            
+            const buffer = await res.arrayBuffer();
+            const decoder = new TextDecoder('windows-1252');
+            const html = decoder.decode(buffer);
+            
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const table = doc.querySelector('table.framed.aw');
+            
+            if (!table) throw new Error('Table not found');
+            
+            const blacklist = [
+                'Frequenz', 'Land', 'Programm', 'KW', 'Polarisation', 
+                'Koordinaten', 'geogr.Länge', 'geogr.Breite', 
+                'geogr.Länge dezimal', 'geogr.Breite dezimal', 'Genauigkeit der Koordinaten',
+                'Ort'
+            ];
+
+            const translations = {
+                'Sendesprache': 'Language',
+                'Modulation': 'Modulation',
+                'Richtantenne': 'Directional',
+                'Antennenhöhe': 'Antenna Height (AGL)',
+                'HAAT (relative height)': 'HAAT',
+                'RDS-PS': 'RDS-PS',
+                'RDS-PI': 'RDS-PI',
+                'Regionalprogramm': 'Regional Program',
+                'PTY': 'PTY',
+                'Region': 'Region',
+                'Höhe Mastfuß über NN': 'ASL',
+                'Hauptstrahlrichtung': 'Main Beam'
+            };
+
+            const data = {};
+            table.querySelectorAll('tr').forEach(row => {
+                const tds = row.querySelectorAll('td');
+                if (tds.length === 2) {
+                    const key = tds[0].textContent.trim();
+                    const value = tds[1].textContent.trim();
+                    if (!blacklist.includes(key) && value !== '') {
+                        data[key] = value;
+                    }
+                }
+            });
+
+            // Trichter zeichnen, falls Hauptstrahlrichtung vorhanden
+            if (data['Hauptstrahlrichtung'] && mapInstance) {
+                const rawBeamStr = data['Hauptstrahlrichtung'];
+                window._asBeamLayers = L.featureGroup().addTo(mapInstance);
+                
+                // Reichweite berechnen (abhängig von ERP, max 450km)
+                const radiusKm = Math.min(450, Math.max(40, Math.sqrt(txErp) * 15)); 
+
+                // Prüfen, ob es ein Von-Bis-Sektor ist (z.B. "330-130")
+                const rangeMatch = rawBeamStr.match(/(\d+)\s*-\s*(\d+)/);
+
+                if (rangeMatch) {
+                    const startAngle = parseInt(rangeMatch[1], 10);
+                    const endAngle = parseInt(rangeMatch[2], 10);
+                    
+                    // Öffnungswinkel berechnen (behandelt den Sprung über 360°/0° korrekt)
+                    let sweep = endAngle - startAngle;
+                    if (sweep < 0) sweep += 360; 
+                    
+                    const pts = [[txLat, txLon]]; // Startpunkt Mast
+                    
+                    for (let i = 0; i <= sweep; i += 5) {
+                        const angle = (startAngle + i) % 360;
+                        const p = deadReckonRad(txLat, txLon, angle, radiusKm);
+                        pts.push([p.lat, p.lon]);
+                    }
+                    
+                    // Exakten Endpunkt hinzufügen
+                    const pEnd = deadReckonRad(txLat, txLon, endAngle, radiusKm);
+                    pts.push([pEnd.lat, pEnd.lon]);
+                    
+                    L.polygon(pts, {
+                        color: '#ffcc00', weight: 1.5, opacity: 0.65,
+                        fillColor: '#ffaa00', fillOpacity: 0.25, interactive: false
+                    }).addTo(window._asBeamLayers);
+
+                } else {
+                    // Fallback: Einzelne Richtungen (z.B. "75" oder "75, 120")
+                    const beams = rawBeamStr.match(/\d+/g);
+                    if (beams) {
+                        const beamwidth = 60; // 60 Grad Standard-Trichter für diskrete Werte
+                        beams.forEach(bStr => {
+                            const bDeg = parseInt(bStr, 10);
+                            const pts = [[txLat, txLon]];
+                            
+                            for (let angle = bDeg - (beamwidth/2); angle <= bDeg + (beamwidth/2); angle += 5) {
+                                const p = deadReckonRad(txLat, txLon, angle, radiusKm);
+                                pts.push([p.lat, p.lon]);
+                            }
+                            
+                            L.polygon(pts, {
+                                color: '#ffcc00', weight: 1.5, opacity: 0.65,
+                                fillColor: '#ffaa00', fillOpacity: 0.25, interactive: false
+                            }).addTo(window._asBeamLayers);
+                        });
+                    }
+                }
+            }
+
+            // Generiere HTML für die verbleibenden Daten
+            let detailsHtml = '';
+            for (const [key, value] of Object.entries(data)) {
+                const englishKey = translations[key] || key; 
+                let displayValue = value;
+                
+                if (key === 'Richtantenne') {
+                    displayValue = value === 'Y' ? 'Yes' : (value === 'N' ? 'No' : value);
+                } else if (key === 'Höhe Mastfuß über NN' || key === 'Antennenhöhe' || key === 'HAAT (relative height)') {
+                    displayValue += ' m';
+                } else if (key === 'Hauptstrahlrichtung') {
+                    displayValue += '°';
+                }
+
+                detailsHtml += `<div><b style="color:#9bb;">${englishKey}:</b> <span style="color:#fff;">${displayValue}</span></div>`;
+            }
+
+            if (detailsHtml === '') {
+                 detailsHtml = '<div style="color:#889; grid-column: span 2; text-align:center;">No additional details available.</div>';
+            }
+
+            infoRow = document.createElement('tr');
+            infoRow.className = 'fmscan-info-row';
+            infoRow.innerHTML = `
+                <td colspan="5" style="padding: 10px; background: #0a0f18; border-bottom: 1px solid #1e3050; border-top: 1px dashed #2a4a7a;">
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size:11px; line-height:1.4;">
+                        ${detailsHtml}
+                    </div>
+                </td>`;
+            tr.parentNode.insertBefore(infoRow, tr.nextSibling);
+            
+            el.className = 'fas fa-info-circle as-stream-btn';
+            el.style.color = '#00ee44';
+
+        } catch (err) {
+            console.warn('[Airplane Scatter] FMSCAN parse error:', err);
+            el.className = 'fas fa-info-circle as-stream-btn';
+            el.style.color = '#f66';
+            if(typeof sendToast === 'function') sendToast('error', 'FMSCAN', 'Failed to load transmitter details.', false, false);
+        }
+    };
 
     function renderTxDetailsContent(txKey, tx) {
         const bd = document.getElementById('as-tx-detail-body');
@@ -1720,24 +2215,28 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
 			bd.dataset.txKey = txKey;
 			bd.dataset.filterMode = S.filterMode;
 
-            const siblings = txSiblings(tx);
+                        const siblings = txSiblings(tx);
             const progsRows = siblings.map(t => {
                 const progName = t.station || t.ps || '?';
                 const tuneCmd = `T${Math.round(t.freq * 1000)}`;
 
                 let playIconHtml = '';
-                if (t.id) {
-                    const isPlaying = (asCurrentStreamId === t.id);
-                    const iconClass = isPlaying ? 'fa-square' : 'fa-play';
-                    const iconColor = isPlaying ? '#fff' : '#4aaeff';
-                    playIconHtml = `<i class="fas ${iconClass} as-stream-btn" style="color:${iconColor}; cursor:pointer;" title="Play Livestream" onclick="window._asHandleStreamClick('${t.id}', '${progName.replace(/'/g, "\\'")}', this)" onmouseover="if(this.classList.contains('fa-play')) this.style.color='#fff'" onmouseout="if(this.classList.contains('fa-play')) this.style.color='#4aaeff'"></i>`;
-                } else {
-                    playIconHtml = `<i class="fas fa-play" style="color:#334; cursor:not-allowed;" title="No Stream available"></i>`;
-                }
+                let infoIconHtml = ''; // Variable deklarieren
+                
+				if (t.id) {
+					const isPlaying = (asCurrentStreamId === t.id);
+					const iconClass = isPlaying ? 'fa-square' : 'fa-play';
+					const iconColor = isPlaying ? '#fff' : '#4aaeff';
+					playIconHtml = `<i class="fas ${iconClass} as-stream-btn" style="color:${iconColor}; cursor:pointer;" title="Play Livestream" onclick="window._asHandleStreamClick('${t.id}', '${progName.replace(/'/g, "\\'")}', this)" onmouseover="if(this.classList.contains('fa-play')) this.style.color='#fff'" onmouseout="if(this.classList.contains('fa-play')) this.style.color='#4aaeff'"></i>`;
+					// infoIconHtml = `<i class="fas fa-info-circle as-stream-btn" style="color:#4aaeff; cursor:pointer; margin-left:6px;" title="Load transmitter details from FMSCAN" onclick="window._asFetchFmscan(${t.id}, this, ${t.lat}, ${t.lon}, ${t.erp})"></i>`;
+				}
 
                 return `
                 <tr>
-                    <td style="width:20px; text-align:center; padding-right:8px;">${playIconHtml}</td>
+                    <td style="width:40px; text-align:center; padding-right:8px; white-space:nowrap;">
+                        ${playIconHtml}
+                        ${infoIconHtml}
+                    </td>
                     <td style="color:#4aaeff; white-space:nowrap; cursor:pointer; padding-right:8px;"
                         title="Click to tune"
                         onmouseover="this.style.textDecoration='underline'; this.style.color='#fff';"
@@ -1784,6 +2283,11 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
                 </div>
                 <div style="color:#889; font-size:11px; margin-bottom:4px; border-bottom:1px solid #2a4a7a; padding-bottom:2px;">Crossing Aircraft</div>
                 <div id="as-tx-ac-list"></div>`;
+				
+		    if (window._asBeamLayers && mapInstance) {
+              mapInstance.removeLayer(window._asBeamLayers);
+              window._asBeamLayers = null;
+            }
         }
 
         const acListEl = document.getElementById('as-tx-ac-list');
@@ -2001,6 +2505,7 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
             <button id="as-settings-apply">✔ Apply &amp; Reload</button>
             <button id="as-settings-reset">↺ Reset to defaults</button>
         </div>`;
+		
     }
 
 
@@ -2060,44 +2565,39 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
             if(!panel.contains(e.target) && e.target !== btn) panel.style.display = 'none';
         });
 
-        document.getElementById('as-settings-apply').addEventListener('click', () => {
-            const v = id => document.getElementById(id).value;
-            const isM = document.getElementById('as-s-metric').checked;
+document.getElementById('as-settings-apply').addEventListener('click', () => {
+    const v = id => document.getElementById(id).value;
+    const isM = document.getElementById('as-s-metric').checked;
 
-            const newRadius = parseInt(v('as-s-maxrad'), 10);
-            const radiusChanged = newRadius !== S.txRadiusKm;
+    localStorage.setItem('as_use_metric',       isM);
+    localStorage.setItem('as_min_txrx_dist',    v('as-s-txrx'));
+    localStorage.setItem('as_min_erp',          v('as-s-erp'));
+    localStorage.setItem('as_lead_time_str',    v('as-s-lead'));
+    localStorage.setItem('as_trail_time_str',   v('as-s-trail'));
+    localStorage.setItem('as_filter_mode',      v('as-s-filter'));
+    localStorage.setItem('as_ac_type_filter',   v('as-s-actype'));
+    localStorage.setItem('as_tx_radius',        v('as-s-maxrad'));
+    localStorage.setItem('as_ac_radius',        v('as-s-maxrad'));
+    localStorage.setItem('as_min_score',        v('as-s-score'));
+    localStorage.setItem('as_rx_agl',           v('as-s-rxagl'));
 
-            localStorage.setItem('as_use_metric',       isM);
-            localStorage.setItem('as_min_txrx_dist',    v('as-s-txrx'));
-            localStorage.setItem('as_min_erp',          v('as-s-erp'));
-            localStorage.setItem('as_lead_time_str',    v('as-s-lead'));
-            localStorage.setItem('as_trail_time_str',   v('as-s-trail'));
-            localStorage.setItem('as_filter_mode',      v('as-s-filter'));
-            localStorage.setItem('as_ac_type_filter',   v('as-s-actype'));
-            localStorage.setItem('as_tx_radius',        newRadius);
-            localStorage.setItem('as_ac_radius',        newRadius);
-            localStorage.setItem('as_min_score',        v('as-s-score'));
-            localStorage.setItem('as_rx_agl',           v('as-s-rxagl'));
+    S = loadSettings();
+    _rxElevM = _rxTerrainM + S.rxAglM;
+    panel.style.display = 'none';
+    _persistentCrossings = {};
+    const detailBody = document.getElementById('as-tx-detail-body');
+    if (detailBody) { detailBody.dataset.txKey = ''; detailBody.dataset.filterMode = ''; }
 
-S = loadSettings();
-_rxElevM = _rxTerrainM + S.rxAglM;
-panel.style.display = 'none';
-_persistentCrossings = {};
-const detailBody = document.getElementById('as-tx-detail-body');
-if (detailBody) { detailBody.dataset.txKey = ''; detailBody.dataset.filterMode = ''; }
+    if (_activeTxKey || _activeProfileTxKey) {
+        hideTxDetails();
+    }
 
-if (_activeTxKey || _activeProfileTxKey) {
-    hideTxDetails();
-}
+    localStorage.removeItem(DB_CACHE_KEY);
+    localStorage.removeItem(DB_CACHE_TS);
+    localStorage.removeItem(DB_CACHE_LOC);
 
-            if (radiusChanged) {
-                localStorage.removeItem(DB_CACHE_KEY);
-                localStorage.removeItem(DB_CACHE_TS);
-                localStorage.removeItem(DB_CACHE_LOC);
-            }
-
-            startUpdate(false);
-        });
+    startUpdate(false);
+});
 
         document.getElementById('as-settings-reset').addEventListener('click', () => {
             document.getElementById('as-s-metric').checked  = true;
@@ -2218,6 +2718,7 @@ if (_activeTxKey || _activeProfileTxKey) {
         addResize(wrapper);
         initSettingsPanel();
         initProfileCanvasEvents();
+		initProfileCanvasHover();
 
         document.getElementById('as-close').onclick           = closeMap;
         document.getElementById('as-tx-detail-close').onclick = hideTxDetails;
@@ -2629,69 +3130,45 @@ if (_activeTxKey || _activeProfileTxKey) {
         return true;
     }
 
-    async function loadTxDatabase(lat, lon) {
-        if (isFmdxCacheValid(lat, lon)) {
-            try {
-                const raw = localStorage.getItem(DB_CACHE_KEY);
-                if (raw) { await new Promise(r => setTimeout(r, 5)); return JSON.parse(raw); }
-            } catch(e) {}
-        }
+ // ── FMDX endpoint (server-side cached & filtered) ─────────────────────────
+const FMDX_API_ENDPOINT = currentUrlForProxy.origin
+    + currentUrlForProxy.pathname.replace(/\/setup\/?$/, '/').replace(/\/$/, '')
+    + '/api/airplanescatter/fmdx';
 
-        const directUrl = FMDX_API_BASE + '?qth=' + encodeURIComponent(lat + ',' + lon);
-        let data = null;
-        try { const r = await fetch(directUrl); if (r.ok) data = await r.json(); } catch(e) {}
-
-        if (!data) {
-            try {
-                const r = await fetch(proxyUrl(directUrl));
-                if(!r.ok) throw new Error('HTTP ' + r.status);
-                data = await r.json();
-            } catch(e) { throw new Error('TX DB Fetch failed'); }
-        }
-
-        const locs = data.locations || data;
-        if (!locs || typeof locs !== 'object') throw new Error('Invalid TX DB format');
-
-        const latDelta = S.txRadiusKm / 111.0;
-        const lonDelta = S.txRadiusKm / Math.max(0.1, Math.abs(111.0 * Math.cos(lat * Math.PI / 180)));
-
-        const stations = [];
-        const locIds   = Object.keys(locs);
-        let lastYield  = performance.now();
-
-        for (let i = 0; i < locIds.length; i++) {
-            if (performance.now() - lastYield > 10) {
-                await new Promise(r => setTimeout(r, 5));
-                lastYield = performance.now();
-            }
-            const loc    = locs[locIds[i]];
-            if (!loc || !Array.isArray(loc.stations)) continue;
-            const locLat = parseFloat(loc.lat), locLon = parseFloat(loc.lon);
-            if (Math.abs(locLat - lat) > latDelta || Math.abs(locLon - lon) > lonDelta) continue;
-            const dist = haversineKm(lat, lon, locLat, locLon);
-            if (dist > S.txRadiusKm) continue;
-            loc.stations.forEach(st => {
-                const fMHz = parseFloat(st.freq), erp = parseFloat(st.erp);
-                if (fMHz < 87.5 || fMHz > 108.0 || isNaN(erp) || erp < S.minTxErpKw) return;
-                stations.push({
-                    id: st.id, freq: fMHz, city: loc.name||'', itu: loc.itu||'',
-                    erp, lat: locLat, lon: locLon, dist: Math.round(dist),
-                    terrainM: 0, station: st.station||'', ps: st.ps||'', pol: st.pol||''
-                });
-            });
-        }
-
+async function loadTxDatabase(lat, lon) {
+    // Use the client-side localStorage cache first (avoids hitting the server
+    // on every panel open – server itself re-fetches upstream at most once per 24 h)
+    if (isFmdxCacheValid(lat, lon)) {
         try {
-            await new Promise(r => setTimeout(r, 5));
-            localStorage.setItem(DB_CACHE_KEY, JSON.stringify(stations));
-            localStorage.setItem(DB_CACHE_TS,  String(Date.now()));
-            localStorage.setItem(DB_CACHE_LOC, JSON.stringify({lat, lon, radius: S.txRadiusKm}));
-        } catch(e) {
-            console.warn('[Airplane Scatter] Not enough space to cache FMDX DB.');
-        }
-
-        return stations;
+            const raw = localStorage.getItem(DB_CACHE_KEY);
+            if (raw) return JSON.parse(raw);
+        } catch (e) {}
     }
+
+    // Request the pre-filtered station list from our own server.
+    // The server holds the full 50 MB DB locally; only the filtered result
+    // (typically < 200 KB) is transferred to the client.
+    const url = `${FMDX_API_ENDPOINT}?qth=${encodeURIComponent(lat + ',' + lon)}`
+              + `&radius=${S.txRadiusKm}&erp=${S.minTxErpKw}`;
+
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`TX DB fetch failed: HTTP ${r.status}`);
+
+    // The server already returns a ready-to-use stations[] array –
+    // no further parsing or filtering is needed on the client side.
+    const stations = await r.json();
+
+    // Persist to localStorage so subsequent opens are instant
+    try {
+        localStorage.setItem(DB_CACHE_KEY, JSON.stringify(stations));
+        localStorage.setItem(DB_CACHE_TS,  String(Date.now()));
+        localStorage.setItem(DB_CACHE_LOC, JSON.stringify({ lat, lon, radius: S.txRadiusKm }));
+    } catch (e) {
+        console.warn('[Airplane Scatter] Not enough space to cache TX DB in localStorage.');
+    }
+
+    return stations;
+}
 
     const ADSB_SOURCES = [
         {
