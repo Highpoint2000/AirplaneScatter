@@ -811,36 +811,72 @@ function meetsAcTypeFilter(ac) {
         return 0.3 + 0.7 * Math.max(0, Math.cos(toRad(trackDiff)));
     }
 
-    function _evalScatterAt(acLat,acLon,acAltFt,acTrackDeg,acCategory,rxLat,rxLon,rxElevM,tx){
-        const txLat=parseFloat(tx.lat),txLon=parseFloat(tx.lon);
-        const altM=acAltFt*0.3048, txEffM=(tx.terrainM||0)+TX_HEIGHT_DEFAULT_M;
-        const d_tx=haversineKm(acLat,acLon,txLat,txLon), d_rx=haversineKm(acLat,acLon,rxLat,rxLon), d_txrx=haversineKm(txLat,txLon,rxLat,rxLon);
+function _evalScatterAt(acLat, acLon, acAltFt, acTrackDeg, acCategory, rxLat, rxLon, rxElevM, tx) {
+    const txLat = parseFloat(tx.lat), txLon = parseFloat(tx.lon);
+    const altM = acAltFt * 0.3048, txEffM = (tx.terrainM || 0) + TX_HEIGHT_DEFAULT_M;
+    const d_tx   = haversineKm(acLat, acLon, txLat, txLon);
+    const d_rx   = haversineKm(acLat, acLon, rxLat, rxLon);
+    const d_txrx = haversineKm(txLat, txLon, rxLat, rxLon);
 
-        if(d_tx < 5 || d_rx < 5 || d_txrx<S.minTxRxDistKm) return null;
+    // ── Hard filters ─────────────────────────────────────────────────────
+    if (d_tx < 5 || d_rx < 5 || d_txrx < S.minTxRxDistKm) return null;
+    if (d_tx > radioHorizonKm(txEffM, altM) || d_rx > radioHorizonKm(rxElevM, altM)) return null;
 
-        const elevAngleTx = toDeg(Math.atan2(Math.max(0, altM - txEffM) / 1000, d_tx));
-        const elevAngleRx = toDeg(Math.atan2(Math.max(0, altM - rxElevM) / 1000, d_rx));
-        if (elevAngleTx > 9 || elevAngleRx > 9) return null;
+    const dynamicEllipseFactor = 1.02 + Math.min(1.0, altM / 12000) * 0.06;
+    if (d_tx + d_rx > dynamicEllipseFactor * d_txrx) return null;
 
-        if(d_tx>radioHorizonKm(txEffM,altM) || d_rx>radioHorizonKm(rxElevM,altM)) return null;
+    const { crossTrackKm, alongTrackKm } = crossAlongTrack(txLat, txLon, rxLat, rxLon, acLat, acLon);
+    if (alongTrackKm > d_txrx * 1.1) return null;
 
-        const dynamicEllipseFactor = 1.02 + Math.min(1.0, altM / 12000) * 0.06;
-        if(d_tx+d_rx>dynamicEllipseFactor*d_txrx) return null;
+    // ── Elevation angles from TX and RX to the aircraft ──────────────────
+    const elevAngleTxDeg = toDeg(Math.atan2(Math.max(0, altM - txEffM), d_tx * 1000));
+    const elevAngleRxDeg = toDeg(Math.atan2(Math.max(0, altM - rxElevM), d_rx * 1000));
 
-        const {crossTrackKm,alongTrackKm}=crossAlongTrack(txLat,txLon,rxLat,rxLon,acLat,acLon);
-        if(alongTrackKm>d_txrx*1.1) return null;
+    // Hard limit: > 9° = definitely no scatter
+    if (elevAngleTxDeg > 9 || elevAngleRxDeg > 9) return null;
 
-        const { reflScore } = reflectionGeometryScore(txLat,txLon,acLat,acLon,rxLat,rxLon);
-        const fuseScore=fuselageAlignmentScore(acTrackDeg,txLat,txLon,acLat,acLon,rxLat,rxLon);
-        const altScore=Math.max(0, Math.min(1, Math.log((altM)/1500)/Math.log(12000/1500)));
-        const freqFactor=1.0 - 0.03 * ((tx.freq - 98) / 20.5);
-        const erpScoreVal=Math.min(1.0, Math.log10(tx.erp/10+1) / Math.log10(101));
-        const distScore=Math.exp(-crossTrackKm/25);
-        const sizeMult=acSizeMult(acCategory);
+    // ── Sweet Spot Score (core of the new logic) ──────────────────────────
+    // TX: ideal angle 0.5°–1.5°  (flat radiation / low-elevation beam)
+    // RX: ideal angle 2°–5°      (typical Yagi / beam antenna)
+    // Gaussian curve centred on the ideal angle for each end
+    const txIdeal = 1.0;   // degrees – TX ideal elevation angle
+    const rxIdeal = 3.5;   // degrees – RX ideal elevation angle
+    const txSigma = 1.2;   // width of the TX Gaussian (smaller = stricter)
+    const rxSigma = 2.0;   // width of the RX Gaussian
 
-        const baseScore = distScore*30 + reflScore*25 + altScore*15 + fuseScore*10 + erpScoreVal*10 + (freqFactor-0.97)/0.06*5;
-        return { score:Math.max(0, Math.min(100,Math.round(baseScore * sizeMult))), crossTrackKm };
-    }
+    const txElevScore = Math.exp(-Math.pow(elevAngleTxDeg - txIdeal, 2) / (2 * txSigma * txSigma));
+    const rxElevScore = Math.exp(-Math.pow(elevAngleRxDeg - rxIdeal, 2) / (2 * rxSigma * rxSigma));
+
+    // Combined sweet-spot score: both ends must be favourable simultaneously
+    const sweetSpotScore = txElevScore * rxElevScore;
+
+    // ── Remaining scores (unchanged) ─────────────────────────────────────
+    const { reflScore } = reflectionGeometryScore(txLat, txLon, acLat, acLon, rxLat, rxLon);
+    const fuseScore    = fuselageAlignmentScore(acTrackDeg, txLat, txLon, acLat, acLon, rxLat, rxLon);
+    const freqFactor   = 1.0 - 0.03 * ((tx.freq - 98) / 20.5);
+    const erpScoreVal  = Math.min(1.0, Math.log10(tx.erp / 10 + 1) / Math.log10(101));
+    const distScore    = Math.exp(-crossTrackKm / 25);
+    const sizeMult     = acSizeMult(acCategory);
+
+    // ── New weighting: Sweet Spot dominates ──────────────────────────────
+    // sweetSpotScore : 45 pts  (replaces altScore 15 + implicit elevation logic)
+    // distScore      : 25 pts  (was 30)
+    // reflScore      : 15 pts  (was 25)
+    // fuseScore      :  8 pts  (was 10)
+    // erpScoreVal    :  5 pts  (was 10)
+    // freqFactor     :  2 pts  (was  5)
+    const baseScore = sweetSpotScore * 45
+                    + distScore      * 25
+                    + reflScore      * 15
+                    + fuseScore      *  8
+                    + erpScoreVal    *  5
+                    + (freqFactor - 0.97) / 0.06 * 2;
+
+    return {
+        score:        Math.max(0, Math.min(100, Math.round(baseScore * sizeMult))),
+        crossTrackKm
+    };
+}
 
 function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
     if(!ac.lat||!ac.lon||isNaN(ac.lat)||isNaN(ac.lon)) return null;
