@@ -813,12 +813,13 @@ function meetsAcTypeFilter(ac) {
 
 function _evalScatterAt(acLat, acLon, acAltFt, acTrackDeg, acCategory, rxLat, rxLon, rxElevM, tx) {
     const txLat = parseFloat(tx.lat), txLon = parseFloat(tx.lon);
-    const altM = acAltFt * 0.3048, txEffM = (tx.terrainM || 0) + TX_HEIGHT_DEFAULT_M;
+    const altM   = acAltFt * 0.3048;
+    const txEffM = (tx.terrainM || 0) + TX_HEIGHT_DEFAULT_M;
     const d_tx   = haversineKm(acLat, acLon, txLat, txLon);
     const d_rx   = haversineKm(acLat, acLon, rxLat, rxLon);
     const d_txrx = haversineKm(txLat, txLon, rxLat, rxLon);
 
-    // ── Hard filters ─────────────────────────────────────────────────────
+    // ── Hard filters ──────────────────────────────────────────────────────
     if (d_tx < 5 || d_rx < 5 || d_txrx < S.minTxRxDistKm) return null;
     if (d_tx > radioHorizonKm(txEffM, altM) || d_rx > radioHorizonKm(rxElevM, altM)) return null;
 
@@ -828,48 +829,68 @@ function _evalScatterAt(acLat, acLon, acAltFt, acTrackDeg, acCategory, rxLat, rx
     const { crossTrackKm, alongTrackKm } = crossAlongTrack(txLat, txLon, rxLat, rxLon, acLat, acLon);
     if (alongTrackKm > d_txrx * 1.1) return null;
 
-    // ── Elevation angles from TX and RX to the aircraft ──────────────────
-    const elevAngleTxDeg = toDeg(Math.atan2(Math.max(0, altM - txEffM), d_tx * 1000));
-    const elevAngleRxDeg = toDeg(Math.atan2(Math.max(0, altM - rxElevM), d_rx * 1000));
+    // ── Earth-curvature corrected elevation angles ────────────────────────
+    // Same c_factor = 16.974 as used in the elevation profile drawing.
+    // The "horizon line" in the profile is exactly this corrected envelope.
+    // A plane ABOVE both horizon lines has a positive corrected angle from
+    // both TX and RX — that is the only valid scatter geometry.
+    const c_factor = 16.974;
+    const bulgeTx  = (d_tx * d_tx) / c_factor;  // earth bulge at plane seen from TX [m]
+    const bulgeRx  = (d_rx * d_rx) / c_factor;  // earth bulge at plane seen from RX [m]
 
-    // Hard limit: > 9° = definitely no scatter
+    // Signed angle: positive = above horizon line, negative = below → no scatter
+    const elevAngleTxDeg = toDeg(Math.atan2((altM - bulgeTx) - txEffM, d_tx * 1000));
+    const elevAngleRxDeg = toDeg(Math.atan2((altM - bulgeRx) - rxElevM, d_rx * 1000));
+
+    // Must be above BOTH horizon lines (lila zone in profile)
+    // Strict: negative angle = below horizon = physically impossible for scatter
+    if (elevAngleTxDeg < 0 || elevAngleRxDeg < 0) return null;
+
+    // Must not be too steep (antenna pattern drops off above ~5–6°)
     if (elevAngleTxDeg > 9 || elevAngleRxDeg > 9) return null;
 
-    // ── Sweet Spot Score (core of the new logic) ──────────────────────────
-    // TX: ideal angle 0.5°–1.5°  (flat radiation / low-elevation beam)
-    // RX: ideal angle 2°–5°      (typical Yagi / beam antenna)
-    // Gaussian curve centred on the ideal angle for each end
-    const txIdeal = 1.0;   // degrees – TX ideal elevation angle
-    const rxIdeal = 3.5;   // degrees – RX ideal elevation angle
-    const txSigma = 1.2;   // width of the TX Gaussian (smaller = stricter)
-    const rxSigma = 2.0;   // width of the RX Gaussian
+    // ── Sweet Spot Score: reward lowest possible elevation angles ─────────
+    // The ideal is as close to 0° as possible (just above the horizon line).
+    // Score = 1.0 at 0°, falling off as angle increases.
+    // Use an exponential decay — sharper for TX (directional tower antenna),
+    // softer for RX (Yagi typically accepts up to ~5°).
+    //
+    //   txElevScore: peaks at 0°, half-power at ~1.5°
+    //   rxElevScore: peaks at 0°, half-power at ~3.5°
+    const txElevScore = Math.exp(-(elevAngleTxDeg * elevAngleTxDeg) / (2 * 1.2 * 1.2));
+    const rxElevScore = Math.exp(-(elevAngleRxDeg * elevAngleRxDeg) / (2 * 3.0 * 3.0));
 
-    const txElevScore = Math.exp(-Math.pow(elevAngleTxDeg - txIdeal, 2) / (2 * txSigma * txSigma));
-    const rxElevScore = Math.exp(-Math.pow(elevAngleRxDeg - rxIdeal, 2) / (2 * rxSigma * rxSigma));
-
-    // Combined sweet-spot score: both ends must be favourable simultaneously
+    // Both must be good simultaneously → multiply
     const sweetSpotScore = txElevScore * rxElevScore;
 
-    // ── Remaining scores (unchanged) ─────────────────────────────────────
-    const { reflScore } = reflectionGeometryScore(txLat, txLon, acLat, acLon, rxLat, rxLon);
-    const fuseScore    = fuselageAlignmentScore(acTrackDeg, txLat, txLon, acLat, acLon, rxLat, rxLon);
-    const freqFactor   = 1.0 - 0.03 * ((tx.freq - 98) / 20.5);
-    const erpScoreVal  = Math.min(1.0, Math.log10(tx.erp / 10 + 1) / Math.log10(101));
-    const distScore    = Math.exp(-crossTrackKm / 25);
-    const sizeMult     = acSizeMult(acCategory);
+    // ── Margin above horizon line (lila zone thickness) ───────────────────
+    // Extra bonus for being just barely above both horizons simultaneously.
+    // Represents the plane being deep inside the purple zone.
+    // horizonMarginTx/Rx = how many metres the plane clears the horizon envelope
+    const horizonMarginTxM = (altM - bulgeTx) - txEffM;
+    const horizonMarginRxM = (altM - bulgeRx) - rxElevM;
+    const marginScore = Math.min(1.0,
+        Math.exp(-Math.max(horizonMarginTxM, horizonMarginRxM) / 4000)
+    );
 
-    // ── New weighting: Sweet Spot dominates ──────────────────────────────
-    // sweetSpotScore : 45 pts  (replaces altScore 15 + implicit elevation logic)
-    // distScore      : 25 pts  (was 30)
-    // reflScore      : 15 pts  (was 25)
-    // fuseScore      :  8 pts  (was 10)
-    // erpScoreVal    :  5 pts  (was 10)
-    // freqFactor     :  2 pts  (was  5)
-    const baseScore = sweetSpotScore * 45
-                    + distScore      * 25
-                    + reflScore      * 15
-                    + fuseScore      *  8
-                    + erpScoreVal    *  5
+    // ── Remaining geometry scores ─────────────────────────────────────────
+    const { reflScore } = reflectionGeometryScore(txLat, txLon, acLat, acLon, rxLat, rxLon);
+    const fuseScore   = fuselageAlignmentScore(acTrackDeg, txLat, txLon, acLat, acLon, rxLat, rxLon);
+    const freqFactor  = 1.0 - 0.03 * ((tx.freq - 98) / 20.5);
+    const erpScoreVal = Math.min(1.0, Math.log10(tx.erp / 10 + 1) / Math.log10(101));
+    const distScore   = Math.exp(-crossTrackKm / 25);
+    const sizeMult    = acSizeMult(acCategory);
+
+    // ── Weighted sum ──────────────────────────────────────────────────────
+    // sweetSpotScore + marginScore dominate (60 pts total):
+    //   a plane just above both horizon lines scores near 100%
+    //   a plane high above (steep angle) scores near 0%
+    const baseScore = sweetSpotScore * 40   // flat elevation angle from both ends
+                    + marginScore    * 20   // just above the horizon envelope
+                    + distScore      * 20   // close to TX-RX great-circle path
+                    + reflScore      * 10   // good reflection geometry
+                    + fuseScore      *  5   // fuselage aligned
+                    + erpScoreVal    *  3   // strong transmitter
                     + (freqFactor - 0.97) / 0.06 * 2;
 
     return {
