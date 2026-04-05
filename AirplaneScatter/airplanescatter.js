@@ -821,7 +821,6 @@ function _evalScatterAt(acLat, acLon, acAltFt, acTrackDeg, acCategory, rxLat, rx
 
     // ── Hard filters ──────────────────────────────────────────────────────
     if (d_tx < 5 || d_rx < 5 || d_txrx < S.minTxRxDistKm) return null;
-    if (d_tx > radioHorizonKm(txEffM, altM) || d_rx > radioHorizonKm(rxElevM, altM)) return null;
 
     const dynamicEllipseFactor = 1.02 + Math.min(1.0, altM / 12000) * 0.06;
     if (d_tx + d_rx > dynamicEllipseFactor * d_txrx) return null;
@@ -829,48 +828,94 @@ function _evalScatterAt(acLat, acLon, acAltFt, acTrackDeg, acCategory, rxLat, rx
     const { crossTrackKm, alongTrackKm } = crossAlongTrack(txLat, txLon, rxLat, rxLon, acLat, acLon);
     if (alongTrackKm > d_txrx * 1.1) return null;
 
-    // ── Earth-curvature corrected elevation angles ────────────────────────
-    // Same c_factor = 16.974 as used in the elevation profile drawing.
-    // The "horizon line" in the profile is exactly this corrected envelope.
-    // A plane ABOVE both horizon lines has a positive corrected angle from
-    // both TX and RX — that is the only valid scatter geometry.
-    const c_factor = 16.974;
-    const bulgeTx  = (d_tx * d_tx) / c_factor;  // earth bulge at plane seen from TX [m]
-    const bulgeRx  = (d_rx * d_rx) / c_factor;  // earth bulge at plane seen from RX [m]
+    // ── Terrain-aware horizon check (same logic as the profile drawing) ───
+    // Reconstruct the TX and RX horizon envelopes along the TX→RX great
+    // circle and check whether the aircraft clears BOTH envelopes at its
+    // along-track position. This is exactly what the red/yellow lines in
+    // the elevation profile show.
+    //
+    // We use a lightweight version: sample the path at ~50 points,
+    // compute the running-maximum envelope from each end, then interpolate
+    // the envelope height at the aircraft's along-track position.
+    const NUM_SAMPLES = 50;
+    const stepKm      = d_txrx / (NUM_SAMPLES - 1);
+    const c_factor    = 16.974;
+    const brg         = bearingDeg(rxLat, rxLon, txLat, txLon);
 
-    // Signed angle: positive = above horizon line, negative = below → no scatter
+    // Sample terrain elevations from cache along the RX→TX path
+    const sampledElevs = [];
+    for (let i = 0; i < NUM_SAMPLES; i++) {
+        const distKm = i * stepKm;
+        const pt     = deadReckonRad(rxLat, rxLon, brg, distKm);
+        const key    = pt.lat.toFixed(4) + '_' + pt.lon.toFixed(4);
+        sampledElevs.push(_elevCache[key] || 0);
+    }
+
+    // RX envelope: running maximum from RX (index 0) toward TX
+    let m_max_rx = -Infinity;
+    const hrx_env = new Float64Array(NUM_SAMPLES);
+    for (let i = 0; i < NUM_SAMPLES; i++) {
+        const x = i * stepKm;
+        if (x === 0) {
+            hrx_env[i] = rxElevM;
+        } else {
+            const c_drop = (x * x) / c_factor;
+            const m = (sampledElevs[i] - rxElevM - c_drop) / x;
+            if (m > m_max_rx) m_max_rx = m;
+            hrx_env[i] = rxElevM + m_max_rx * x + c_drop;
+        }
+    }
+
+    // TX envelope: running maximum from TX (index NUM_SAMPLES-1) toward RX
+    let m_max_tx = -Infinity;
+    const htx_env = new Float64Array(NUM_SAMPLES);
+    for (let i = NUM_SAMPLES - 1; i >= 0; i--) {
+        const d_tx_i = d_txrx - (i * stepKm);
+        if (d_tx_i === 0) {
+            htx_env[i] = txEffM;
+        } else {
+            const c_drop = (d_tx_i * d_tx_i) / c_factor;
+            const m = (sampledElevs[i] - txEffM - c_drop) / d_tx_i;
+            if (m > m_max_tx) m_max_tx = m;
+            htx_env[i] = txEffM + m_max_tx * d_tx_i + c_drop;
+        }
+    }
+
+    // Interpolate envelope heights at the aircraft's along-track position
+    const rawIdx  = alongTrackKm / stepKm;
+    const idxLo   = Math.max(0, Math.min(NUM_SAMPLES - 2, Math.floor(rawIdx)));
+    const idxHi   = idxLo + 1;
+    const frac    = rawIdx - idxLo;
+    const hrxAtAc = hrx_env[idxLo] * (1 - frac) + hrx_env[idxHi] * frac;
+    const htxAtAc = htx_env[idxLo] * (1 - frac) + htx_env[idxHi] * frac;
+
+    // Aircraft must be ABOVE both horizon envelopes (= inside purple zone)
+    // This is the definitive visibility check, terrain-aware.
+    if (altM < hrxAtAc || altM < htxAtAc) return null;
+
+    // ── Elevation angles WITH earth-curvature correction ──────────────────
+    const bulgeTx = (d_tx * d_tx) / c_factor;
+    const bulgeRx = (d_rx * d_rx) / c_factor;
+
     const elevAngleTxDeg = toDeg(Math.atan2((altM - bulgeTx) - txEffM, d_tx * 1000));
     const elevAngleRxDeg = toDeg(Math.atan2((altM - bulgeRx) - rxElevM, d_rx * 1000));
 
-    // Must be above BOTH horizon lines (lila zone in profile)
-    // Strict: negative angle = below horizon = physically impossible for scatter
-    if (elevAngleTxDeg < 0 || elevAngleRxDeg < 0) return null;
-
-    // Must not be too steep (antenna pattern drops off above ~5–6°)
+    // Must not be too steep
     if (elevAngleTxDeg > 9 || elevAngleRxDeg > 9) return null;
 
-    // ── Sweet Spot Score: reward lowest possible elevation angles ─────────
-    // The ideal is as close to 0° as possible (just above the horizon line).
-    // Score = 1.0 at 0°, falling off as angle increases.
-    // Use an exponential decay — sharper for TX (directional tower antenna),
-    // softer for RX (Yagi typically accepts up to ~5°).
-    //
-    //   txElevScore: peaks at 0°, half-power at ~1.5°
-    //   rxElevScore: peaks at 0°, half-power at ~3.5°
-    const txElevScore = Math.exp(-(elevAngleTxDeg * elevAngleTxDeg) / (2 * 1.2 * 1.2));
-    const rxElevScore = Math.exp(-(elevAngleRxDeg * elevAngleRxDeg) / (2 * 3.0 * 3.0));
-
-    // Both must be good simultaneously → multiply
+    // ── Sweet Spot Score ──────────────────────────────────────────────────
+    // Reward aircraft that are just barely above both horizon envelopes
+    // with the flattest possible elevation angle from both ends.
+    const txSigma = 1.2, rxSigma = 3.0;
+    const txElevScore = Math.exp(-(elevAngleTxDeg * elevAngleTxDeg) / (2 * txSigma * txSigma));
+    const rxElevScore = Math.exp(-(elevAngleRxDeg * elevAngleRxDeg) / (2 * rxSigma * rxSigma));
     const sweetSpotScore = txElevScore * rxElevScore;
 
-    // ── Margin above horizon line (lila zone thickness) ───────────────────
-    // Extra bonus for being just barely above both horizons simultaneously.
-    // Represents the plane being deep inside the purple zone.
-    // horizonMarginTx/Rx = how many metres the plane clears the horizon envelope
-    const horizonMarginTxM = (altM - bulgeTx) - txEffM;
-    const horizonMarginRxM = (altM - bulgeRx) - rxElevM;
+    // Margin bonus: reward being close to (but above) the horizon envelope
+    const marginTxM = altM - htxAtAc;
+    const marginRxM = altM - hrxAtAc;
     const marginScore = Math.min(1.0,
-        Math.exp(-Math.max(horizonMarginTxM, horizonMarginRxM) / 4000)
+        Math.exp(-Math.max(marginTxM, marginRxM) / 4000)
     );
 
     // ── Remaining geometry scores ─────────────────────────────────────────
@@ -881,16 +926,12 @@ function _evalScatterAt(acLat, acLon, acAltFt, acTrackDeg, acCategory, rxLat, rx
     const distScore   = Math.exp(-crossTrackKm / 25);
     const sizeMult    = acSizeMult(acCategory);
 
-    // ── Weighted sum ──────────────────────────────────────────────────────
-    // sweetSpotScore + marginScore dominate (60 pts total):
-    //   a plane just above both horizon lines scores near 100%
-    //   a plane high above (steep angle) scores near 0%
-    const baseScore = sweetSpotScore * 40   // flat elevation angle from both ends
-                    + marginScore    * 20   // just above the horizon envelope
-                    + distScore      * 20   // close to TX-RX great-circle path
-                    + reflScore      * 10   // good reflection geometry
-                    + fuseScore      *  5   // fuselage aligned
-                    + erpScoreVal    *  3   // strong transmitter
+    const baseScore = sweetSpotScore * 40
+                    + marginScore    * 20
+                    + distScore      * 20
+                    + reflScore      * 10
+                    + fuseScore      *  5
+                    + erpScoreVal    *  3
                     + (freqFactor - 0.97) / 0.06 * 2;
 
     return {
