@@ -5,17 +5,9 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 <img width="500" height="460" alt="grafik" src="https://github.com/user-attachments/assets/4c24cf61-60cf-43ca-954e-55868b6344b7" />
 <img width="310" height="440" alt="grafik" src="https://github.com/user-attachments/assets/59e1bb3d-b202-4b7d-958d-3106a321d547" />
 
-## Version 2.1 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
+## Version 2.1a (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 
-- The TX data from maps.fmdx.org is now loaded directly from RAM, taking over the DB download from tx_search.js
-- Sweet Spot indicates the optimal altitude range in which an aircraft must be for Airplane Scatter to function ideally simultaneously from both TX and RX
-- Problem during ERP migration resolved
-- Elevation profile hover tooltip — new function initProfileCanvasHover() added; shows on mouse-over of the elevation canvas:
-  + Distance from RX / TX at cursor position
-  + Terrain height at cursor (interpolated)
-  + Elevation angle from RX to terrain at cursor (red)
-  + Elevation angle from TX to terrain at cursor (yellow)
-  + Per-aircraft elevation angles from RX and TX (if aircraft is within ±30 km of cursor)
+- Performance-Optimierung und Bugfixing
 
 ## Installation notes
 
@@ -50,6 +42,18 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### Version 2.1 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
+
+- The TX data from maps.fmdx.org is now loaded directly from RAM, taking over the DB download from tx_search.js
+- Sweet Spot indicates the optimal altitude range in which an aircraft must be for Airplane Scatter to function ideally simultaneously from both TX and RX
+- Problem during ERP migration resolved
+- Elevation profile hover tooltip — new function initProfileCanvasHover() added; shows on mouse-over of the elevation canvas:
+  + Distance from RX / TX at cursor position
+  + Terrain height at cursor (interpolated)
+  + Elevation angle from RX to terrain at cursor (red)
+  + Elevation angle from TX to terrain at cursor (yellow)
+  + Per-aircraft elevation angles from RX and TX (if aircraft is within ±30 km of cursor)
 
 ### Version 2.0 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 

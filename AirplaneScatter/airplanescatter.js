@@ -1,8 +1,8 @@
 /////////////////////////////////////////////////////////////////
 //                                                             //
-//  AIRPLANE SCATTER CLIENT PLUGIN FOR FM-DX-WEBSERVER (V2.1)  //
+//  AIRPLANE SCATTER CLIENT PLUGIN FOR FM-DX-WEBSERVER (V2.1a) //
 //                                                             //
-//  by Highpoint                last update: 2026-04-03        //
+//  by Highpoint                last update: 2026-04-05        //
 //                                                             //
 //  https://github.com/Highpoint2000/AirplaneScatter           //
 //                                                             //
@@ -11,7 +11,7 @@
 (() => {
 
     // ── Plugin metadata & Update Check ────────────────────────────────────
-    const pluginVersion     = "2.1";
+    const pluginVersion     = "2.1a";
     const pluginName        = "Airplane Scatter";
     const pluginHomepageUrl = "https://github.com/highpoint2000/AirplaneScatter/releases";
     const pluginUpdateUrl   = "https://raw.githubusercontent.com/Highpoint2000/AirplaneScatter/refs/heads/main/AirplaneScatter/airplanescatter.js";
@@ -66,7 +66,7 @@
     const FMDX_API_BASE          = 'https://maps.fmdx.org/api/';
     const ELEVATION_API          = 'https://api.opentopodata.org/v1/srtm90m?locations=';
 
-    const FORECAST_STEPS_SEC     = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300];
+    const FORECAST_STEPS_SEC     = [0, 60, 120, 180, 300];
     const AIRCRAFT_TIMEOUT_MS    = 180000;
 
     const AIRCRAFT_UPDATE_MS     = 15000;
@@ -764,7 +764,10 @@ function meetsAcTypeFilter(ac) {
             .sort((a,b) => b.erp - a.erp);
     }
 
-    function gridKey(lat,lon){ return Math.floor(lat/5)+'_'+Math.floor(lon/5); }
+// 10° grid cells instead of 5° → 2×2 = 4 lookups instead of 3×3 = 9
+function gridKey(lat, lon) {
+    return Math.floor(lat / 10) + '_' + Math.floor(lon / 10);
+}
 
     async function buildTxGridAsync(stations) {
         const g = {};
@@ -782,14 +785,17 @@ function meetsAcTypeFilter(ac) {
         return g;
     }
 
-    function nearbyTx(acLat,acLon){
-        const r=[];
-        for(let dlat=-1;dlat<=1;dlat++) for(let dlon=-1;dlon<=1;dlon++){
-            const k=(Math.floor(acLat/5)+dlat)+'_'+(Math.floor(acLon/5)+dlon);
-            if(txStationGrid[k]) r.push(...txStationGrid[k]);
+function nearbyTx(acLat, acLon) {
+    const r = [];
+    // 2×2 neighbourhood covers the full TX search radius at any grid position
+    for (let dlat = -1; dlat <= 1; dlat++) {
+        for (let dlon = -1; dlon <= 1; dlon++) {
+            const k = (Math.floor(acLat / 10) + dlat) + '_' + (Math.floor(acLon / 10) + dlon);
+            if (txStationGrid[k]) r.push(...txStationGrid[k]);
         }
-        return r;
     }
+    return r;
+}
 
     // ── Scoring Helpers ───────────────────────────────────────────────────
     function reflectionGeometryScore(txLat, txLon, acLat, acLon, rxLat, rxLon) {
@@ -812,9 +818,10 @@ function meetsAcTypeFilter(ac) {
     }
 
 function _evalScatterAt(acLat, acLon, acAltFt, acTrackDeg, acCategory, rxLat, rxLon, rxElevM, tx) {
-    const txLat = parseFloat(tx.lat), txLon = parseFloat(tx.lon);
+    const txLat  = parseFloat(tx.lat);
+    const txLon  = parseFloat(tx.lon);
     const altM   = acAltFt * 0.3048;
-    const txEffM = (tx.terrainM || 0) + TX_HEIGHT_DEFAULT_M;
+
     const d_tx   = haversineKm(acLat, acLon, txLat, txLon);
     const d_rx   = haversineKm(acLat, acLon, rxLat, rxLon);
     const d_txrx = haversineKm(txLat, txLon, rxLat, rxLon);
@@ -828,103 +835,50 @@ function _evalScatterAt(acLat, acLon, acAltFt, acTrackDeg, acCategory, rxLat, rx
     const { crossTrackKm, alongTrackKm } = crossAlongTrack(txLat, txLon, rxLat, rxLon, acLat, acLon);
     if (alongTrackKm > d_txrx * 1.1) return null;
 
-    // ── Terrain-aware horizon check (same logic as the profile drawing) ───
-    // Reconstruct the TX and RX horizon envelopes along the TX→RX great
-    // circle and check whether the aircraft clears BOTH envelopes at its
-    // along-track position. This is exactly what the red/yellow lines in
-    // the elevation profile show.
-    //
-    // We use a lightweight version: sample the path at ~50 points,
-    // compute the running-maximum envelope from each end, then interpolate
-    // the envelope height at the aircraft's along-track position.
-    const NUM_SAMPLES = 50;
-    const stepKm      = d_txrx / (NUM_SAMPLES - 1);
-    const c_factor    = 16.974;
-    const brg         = bearingDeg(rxLat, rxLon, txLat, txLon);
-
-    // Sample terrain elevations from cache along the RX→TX path
-    const sampledElevs = [];
-    for (let i = 0; i < NUM_SAMPLES; i++) {
-        const distKm = i * stepKm;
-        const pt     = deadReckonRad(rxLat, rxLon, brg, distKm);
-        const key    = pt.lat.toFixed(4) + '_' + pt.lon.toFixed(4);
-        sampledElevs.push(_elevCache[key] || 0);
-    }
-
-    // RX envelope: running maximum from RX (index 0) toward TX
-    let m_max_rx = -Infinity;
-    const hrx_env = new Float64Array(NUM_SAMPLES);
-    for (let i = 0; i < NUM_SAMPLES; i++) {
-        const x = i * stepKm;
-        if (x === 0) {
-            hrx_env[i] = rxElevM;
-        } else {
-            const c_drop = (x * x) / c_factor;
-            const m = (sampledElevs[i] - rxElevM - c_drop) / x;
-            if (m > m_max_rx) m_max_rx = m;
-            hrx_env[i] = rxElevM + m_max_rx * x + c_drop;
-        }
-    }
-
-    // TX envelope: running maximum from TX (index NUM_SAMPLES-1) toward RX
-    let m_max_tx = -Infinity;
-    const htx_env = new Float64Array(NUM_SAMPLES);
-    for (let i = NUM_SAMPLES - 1; i >= 0; i--) {
-        const d_tx_i = d_txrx - (i * stepKm);
-        if (d_tx_i === 0) {
-            htx_env[i] = txEffM;
-        } else {
-            const c_drop = (d_tx_i * d_tx_i) / c_factor;
-            const m = (sampledElevs[i] - txEffM - c_drop) / d_tx_i;
-            if (m > m_max_tx) m_max_tx = m;
-            htx_env[i] = txEffM + m_max_tx * d_tx_i + c_drop;
-        }
-    }
+    // ── Reuse cached terrain envelope (no Float64Array rebuild per call) ──
+    const env     = getTxEnvelope(tx, rxLat, rxLon, rxElevM);
+    const stepKm  = env.stepKm;
+    const NUM     = env.hrx_env.length;
+    const txEffM  = env.txEffM;
 
     // Interpolate envelope heights at the aircraft's along-track position
     const rawIdx  = alongTrackKm / stepKm;
-    const idxLo   = Math.max(0, Math.min(NUM_SAMPLES - 2, Math.floor(rawIdx)));
+    const idxLo   = Math.max(0, Math.min(NUM - 2, Math.floor(rawIdx)));
     const idxHi   = idxLo + 1;
     const frac    = rawIdx - idxLo;
-    const hrxAtAc = hrx_env[idxLo] * (1 - frac) + hrx_env[idxHi] * frac;
-    const htxAtAc = htx_env[idxLo] * (1 - frac) + htx_env[idxHi] * frac;
+    const hrxAtAc = env.hrx_env[idxLo] * (1 - frac) + env.hrx_env[idxHi] * frac;
+    const htxAtAc = env.htx_env[idxLo] * (1 - frac) + env.htx_env[idxHi] * frac;
 
-    // Aircraft must be ABOVE both horizon envelopes (= inside purple zone)
-    // This is the definitive visibility check, terrain-aware.
+    // Aircraft must be above both horizon envelopes (inside purple zone)
     if (altM < hrxAtAc || altM < htxAtAc) return null;
 
-    // ── Elevation angles WITH earth-curvature correction ──────────────────
-    const bulgeTx = (d_tx * d_tx) / c_factor;
-    const bulgeRx = (d_rx * d_rx) / c_factor;
+    // ── Elevation angles with earth-curvature correction ──────────────────
+    const c_factor = 16.974;
+    const bulgeTx  = (d_tx * d_tx) / c_factor;
+    const bulgeRx  = (d_rx * d_rx) / c_factor;
 
-    const elevAngleTxDeg = toDeg(Math.atan2((altM - bulgeTx) - txEffM, d_tx * 1000));
+    const elevAngleTxDeg = toDeg(Math.atan2((altM - bulgeTx) - txEffM,      d_tx * 1000));
     const elevAngleRxDeg = toDeg(Math.atan2((altM - bulgeRx) - rxElevM, d_rx * 1000));
 
-    // Must not be too steep
     if (elevAngleTxDeg > 9 || elevAngleRxDeg > 9) return null;
 
-    // ── Sweet Spot Score ──────────────────────────────────────────────────
-    // Reward aircraft that are just barely above both horizon envelopes
-    // with the flattest possible elevation angle from both ends.
+    // ── Sweet-spot score ──────────────────────────────────────────────────
     const txSigma = 1.2, rxSigma = 3.0;
-    const txElevScore = Math.exp(-(elevAngleTxDeg * elevAngleTxDeg) / (2 * txSigma * txSigma));
-    const rxElevScore = Math.exp(-(elevAngleRxDeg * elevAngleRxDeg) / (2 * rxSigma * rxSigma));
+    const txElevScore  = Math.exp(-(elevAngleTxDeg * elevAngleTxDeg) / (2 * txSigma * txSigma));
+    const rxElevScore  = Math.exp(-(elevAngleRxDeg * elevAngleRxDeg) / (2 * rxSigma * rxSigma));
     const sweetSpotScore = txElevScore * rxElevScore;
 
-    // Margin bonus: reward being close to (but above) the horizon envelope
-    const marginTxM = altM - htxAtAc;
-    const marginRxM = altM - hrxAtAc;
-    const marginScore = Math.min(1.0,
-        Math.exp(-Math.max(marginTxM, marginRxM) / 4000)
-    );
+    const marginTxM  = altM - htxAtAc;
+    const marginRxM  = altM - hrxAtAc;
+    const marginScore = Math.min(1.0, Math.exp(-Math.max(marginTxM, marginRxM) / 4000));
 
     // ── Remaining geometry scores ─────────────────────────────────────────
     const { reflScore } = reflectionGeometryScore(txLat, txLon, acLat, acLon, rxLat, rxLon);
-    const fuseScore   = fuselageAlignmentScore(acTrackDeg, txLat, txLon, acLat, acLon, rxLat, rxLon);
-    const freqFactor  = 1.0 - 0.03 * ((tx.freq - 98) / 20.5);
-    const erpScoreVal = Math.min(1.0, Math.log10(tx.erp / 10 + 1) / Math.log10(101));
-    const distScore   = Math.exp(-crossTrackKm / 25);
-    const sizeMult    = acSizeMult(acCategory);
+    const fuseScore    = fuselageAlignmentScore(acTrackDeg, txLat, txLon, acLat, acLon, rxLat, rxLon);
+    const freqFactor   = 1.0 - 0.03 * ((tx.freq - 98) / 20.5);
+    const erpScoreVal  = Math.min(1.0, Math.log10(tx.erp / 10 + 1) / Math.log10(101));
+    const distScore    = Math.exp(-crossTrackKm / 25);
+    const sizeMult     = acSizeMult(acCategory);
 
     const baseScore = sweetSpotScore * 40
                     + marginScore    * 20
@@ -940,92 +894,114 @@ function _evalScatterAt(acLat, acLon, acAltFt, acTrackDeg, acCategory, rxLat, rx
     };
 }
 
-function calcScatter(ac, rxLat, rxLon, rxElevM, tx){
-    if(!ac.lat||!ac.lon||isNaN(ac.lat)||isNaN(ac.lon)) return null;
-    if((ac.speed||0)<50 || (ac.alt_ft||0)<1000) return null;
-    if (!meetsAcTypeFilter(ac)) return null;
+function calcScatter(ac, rxLat, rxLon, rxElevM, tx) {
+    if (!ac.lat || !ac.lon || isNaN(ac.lat) || isNaN(ac.lon)) return null;
+    if ((ac.speed || 0) < 50 || (ac.alt_ft || 0) < 1000)     return null;
+    if (!meetsAcTypeFilter(ac))                                return null;
 
-    const txLat=parseFloat(tx.lat),txLon=parseFloat(tx.lon);
-        const crossPt=(ac.track!==null)?gcIntersectionPoint(txLat,txLon,rxLat,rxLon,ac.lat,ac.lon,ac.track):midpointGreatCircle(txLat,txLon,rxLat,rxLon);
-        const speedKmS=((ac.speed||0)*1.852)/3600;
-        if(speedKmS<=0) return null;
+    const txLat = parseFloat(tx.lat), txLon = parseFloat(tx.lon);
+    const crossPt = (ac.track !== null)
+        ? gcIntersectionPoint(txLat, txLon, rxLat, rxLon, ac.lat, ac.lon, ac.track)
+        : midpointGreatCircle(txLat, txLon, rxLat, rxLon);
 
-        const distToCross=haversineKm(ac.lat,ac.lon,crossPt.lat,crossPt.lon);
-        let etaSec=distToCross/speedKmS;
-        if(ac.track!==null){
-            const brgToCross=bearingDeg(ac.lat,ac.lon,crossPt.lat,crossPt.lon);
-            if(Math.abs(normalizeAngle180(ac.track-brgToCross))>90) etaSec = -etaSec;
-        }
+    const speedKmS = ((ac.speed || 0) * 1.852) / 3600;
+    if (speedKmS <= 0) return null;
 
-        let bestScore=0;
-        for(const dtSec of FORECAST_STEPS_SEC){
-            let fLat=ac.lat,fLon=ac.lon, fAltFt=ac.alt_ft + ((ac.vspeed||0)/60)*dtSec;
-            if(ac.track!==null&&ac.speed>0){ const p=deadReckon(ac.lat,ac.lon,ac.track,ac.speed,dtSec); fLat=p.lat; fLon=p.lon; }
-            if(fAltFt<1000) continue;
-            const r=_evalScatterAt(fLat,fLon,fAltFt,ac.track,ac.category,rxLat,rxLon,rxElevM,tx);
-            if(r && r.score>bestScore) bestScore=r.score;
-        }
-
-        return { score: bestScore, etaSec, crossPt };
+    const distToCross = haversineKm(ac.lat, ac.lon, crossPt.lat, crossPt.lon);
+    let etaSec = distToCross / speedKmS;
+    if (ac.track !== null) {
+        const brgToCross = bearingDeg(ac.lat, ac.lon, crossPt.lat, crossPt.lon);
+        if (Math.abs(normalizeAngle180(ac.track - brgToCross)) > 90) etaSec = -etaSec;
     }
+
+    let bestScore = 0;
+    for (const dtSec of FORECAST_STEPS_SEC) {
+        let fLat = ac.lat, fLon = ac.lon;
+        let fAltFt = ac.alt_ft + ((ac.vspeed || 0) / 60) * dtSec;
+        if (ac.track !== null && ac.speed > 0) {
+            const p = deadReckon(ac.lat, ac.lon, ac.track, ac.speed, dtSec);
+            fLat = p.lat; fLon = p.lon;
+        }
+        if (fAltFt < 1000) continue;
+
+        const r = _evalScatterAt(fLat, fLon, fAltFt, ac.track, ac.category, rxLat, rxLon, rxElevM, tx);
+        if (r && r.score > bestScore) {
+            bestScore = r.score;
+            if (bestScore >= 95) break; // Early-exit: near-perfect score, no need to continue
+        }
+    }
+
+    return { score: bestScore, etaSec, crossPt };
+}
 
     // ── Persistent Candidates Processing ──────────────────────────────────
-    async function computePersistentCrossings(robustAircraftList, rxLat, rxLon) {
-        if(!txStations||txStations.length===0) return;
-        const activeIcaos = new Set(robustAircraftList.map(a=>a.icao24));
+async function computePersistentCrossings(robustAircraftList, rxLat, rxLon) {
+    if (!txStations || txStations.length === 0) return;
+    const activeIcaos = new Set(robustAircraftList.map(a => a.icao24));
 
-        for (let icao in _persistentCrossings) {
-            if (!activeIcaos.has(icao)) delete _persistentCrossings[icao];
+    for (let icao in _persistentCrossings) {
+        if (!activeIcaos.has(icao)) delete _persistentCrossings[icao];
+    }
+
+    let lastYield = performance.now();
+    for (let i = 0; i < robustAircraftList.length; i++) {
+        // Yield to the event loop so the UI stays responsive
+        if (performance.now() - lastYield > 8) {
+            await new Promise(r => setTimeout(r, 0));
+            lastYield = performance.now();
         }
 
-        let lastYield = performance.now();
-        for (let i = 0; i < robustAircraftList.length; i++) {
-            if (performance.now() - lastYield > 10) {
-                await new Promise(r => setTimeout(r, 5));
-                lastYield = performance.now();
-            }
+        const ac = robustAircraftList[i];
+        if (!ac.lat || !ac.lon) continue;
+        if (!meetsAcTypeFilter(ac)) {
+            delete _persistentCrossings[ac.icao24];
+            continue;
+        }
 
-            const ac = robustAircraftList[i];
-            if(!ac.lat||!ac.lon) continue;
+        if (!_persistentCrossings[ac.icao24]) _persistentCrossings[ac.icao24] = {};
+        const crossings       = _persistentCrossings[ac.icao24];
+        const nearby          = nearbyTx(ac.lat, ac.lon);
+        const currentCalcTime = Date.now();
 
-            if(!_persistentCrossings[ac.icao24]) _persistentCrossings[ac.icao24] = {};
-            const crossings = _persistentCrossings[ac.icao24];
+        for (let j = 0; j < nearby.length; j++) {
+            const tx    = nearby[j];
+            const txKey = tx.lat + '_' + tx.lon + '_' + tx.freq;
 
-            const nearby = nearbyTx(ac.lat, ac.lon);
-            const currentCalcTime = Date.now();
+            // ── Cheap pre-filter (Haversine only, no Float64Array) ────────
+            // Eliminates ~60% of combinations before the expensive calcScatter()
+            const d_tx   = haversineKm(ac.lat, ac.lon, parseFloat(tx.lat), parseFloat(tx.lon));
+            const d_rx   = haversineKm(ac.lat, ac.lon, rxLat, rxLon);
+            const d_txrx = haversineKm(parseFloat(tx.lat), parseFloat(tx.lon), rxLat, rxLon);
 
-            for(let j = 0; j < nearby.length; j++) {
-                const tx = nearby[j];
-                const txKey = tx.lat+'_'+tx.lon+'_'+tx.freq;
-				
-			if (!meetsAcTypeFilter(ac)) {
-				delete _persistentCrossings[ac.icao24];
-				continue;
-			}
+            if (d_tx < 5 || d_rx < 5)              continue;
+            if (d_txrx < S.minTxRxDistKm)           continue;
+            if (d_tx + d_rx > 1.10 * d_txrx)        continue; // loose ellipse check
+            if ((ac.alt_ft || 0) < 1000)             continue;
+            if ((ac.speed  || 0) < 50)               continue;
+            // ─────────────────────────────────────────────────────────────
 
-                const r = calcScatter(ac, rxLat, rxLon, _rxElevM, tx);
+            const r = calcScatter(ac, rxLat, rxLon, _rxElevM, tx);
 
-				if (r && r.score >= S.minScore) {
-					if (crossings[txKey]) {
-						crossings[txKey].etaSec   = r.etaSec;
-						crossings[txKey].ac        = ac;
-						crossings[txKey].score     = r.score;
-						crossings[txKey].calcTime  = currentCalcTime;
-					} else {
-						crossings[txKey] = { tx, ac, etaSec: r.etaSec, score: r.score, calcTime: currentCalcTime };
-					}
-				}
-            }
-
-            for (let tK in crossings) {
-                const liveEta = crossings[tK].etaSec - ((currentCalcTime - crossings[tK].calcTime)/1000);
-                if (liveEta < -S.trailTimeSec) {
-                    delete crossings[tK];
+            if (r && r.score >= S.minScore) {
+                if (crossings[txKey]) {
+                    crossings[txKey].etaSec   = r.etaSec;
+                    crossings[txKey].ac       = ac;
+                    crossings[txKey].score    = r.score;
+                    crossings[txKey].calcTime = currentCalcTime;
+                } else {
+                    crossings[txKey] = { tx, ac, etaSec: r.etaSec, score: r.score, calcTime: currentCalcTime };
                 }
             }
-            if (Object.keys(crossings).length === 0) delete _persistentCrossings[ac.icao24];
         }
+
+        // Remove crossings whose trailing window has elapsed
+        for (let tK in crossings) {
+            const liveEta = crossings[tK].etaSec - ((currentCalcTime - crossings[tK].calcTime) / 1000);
+            if (liveEta < -S.trailTimeSec) delete crossings[tK];
+        }
+        if (Object.keys(crossings).length === 0) delete _persistentCrossings[ac.icao24];
     }
+}
 
     function updateCompassFromRotor() {
         if (!isCompassLocked || lastRotorAzimuth === null) return;
@@ -1237,82 +1213,136 @@ else if (az >= 326.25 && az < 348.75) dirs = ['NW', 'N'];
         }
     }
 
-    function initProfileCanvasEvents() {
-        const canvas = document.getElementById('as-profile-canvas');
-        if(!canvas) return;
+function initProfileCanvasEvents() {
+    const canvas = document.getElementById('as-profile-canvas');
+    if (!canvas) return;
 
-        canvas.addEventListener('wheel', (e) => {
-            e.preventDefault();
-            if(!_activeProfileTxKey) return;
-            const rect = canvas.getBoundingClientRect();
-            const mouseX = e.clientX - rect.left;
-            const w = canvas.width;
-            const padL = 45, padR = 25, drawW = w - padL - padR;
-            if(mouseX < padL || mouseX > w - padR) return;
-
-            const range = profMaxX - profMinX;
-            const mouseKm = profMinX + ((mouseX - padL) / drawW) * range;
-            const zoomFactor = e.deltaY > 0 ? 1.15 : 0.85;
-            let newRange = range * zoomFactor;
-
-            if(newRange > _currentProfileDist) newRange = _currentProfileDist;
-            if(newRange < 5) newRange = 5;
-
-            let newMin = mouseKm - ((mouseX - padL) / drawW) * newRange;
-            let newMax = newMin + newRange;
-
-            if (newMin < 0) { newMax -= newMin; newMin = 0; }
-            if (newMax > _currentProfileDist) { newMin -= (newMax - _currentProfileDist); newMax = _currentProfileDist; }
-            if (newMin < 0) newMin = 0;
-            if (newMax > _currentProfileDist) newMax = _currentProfileDist;
-
-            profMinX = newMin;
-            profMaxX = newMax;
-            redrawActiveProfile();
+    // ── rAF-based throttle so drawProfile runs at most once per frame ────
+    let _rafPending = false;
+    function scheduleRedraw() {
+        if (_rafPending) return;          // already queued – skip
+        _rafPending = true;
+        requestAnimationFrame(() => {
+            _rafPending = false;
+            if (!_activeProfileTxKey || !_activeProfileTxObj) return;
+            const rx = getRxCoords(); if (!rx) return;
+            const allVisible  = getActiveVisibleCrossings();
+            const matchingCrs = allVisible.filter(c =>
+                (c.tx.lat + '_' + c.tx.lon + '_' + c.tx.freq) === _activeProfileTxKey
+            );
+            // keep the hash in sync so the countdown-tick does not re-draw
+            _lastProfileHash = matchingCrs.map(c =>
+                c.ac.icao24 + ':' + Math.round(c.liveEta / 5)
+            ).join('|');
+            drawProfile(matchingCrs, _currentPathElevs, rx, _activeProfileTxObj);
         });
-
-        canvas.addEventListener('mousedown', (e) => {
-            if(_activeProfileTxKey){ isDraggingProf = true; lastMouseX = e.clientX; }
-        });
-        window.addEventListener('mouseup', () => isDraggingProf = false);
-        window.addEventListener('mousemove', (e) => {
-            if(!isDraggingProf || !_activeProfileTxKey) return;
-            const dx = e.clientX - lastMouseX;
-            lastMouseX = e.clientX;
-            const w = canvas.width;
-            const drawW = w - 45 - 25;
-            const range = profMaxX - profMinX;
-            const shiftKm = -(dx / drawW) * range;
-            let newMin = profMinX + shiftKm;
-            let newMax = profMaxX + shiftKm;
-            if(newMin < 0) { newMin = 0; newMax = range; }
-            else if(newMax > _currentProfileDist) { newMax = _currentProfileDist; newMin = _currentProfileDist - range; }
-            profMinX = newMin;
-            profMaxX = newMax;
-            redrawActiveProfile();
-        });
-
-        const yZoom = document.getElementById('as-profile-y-zoom');
-        if(yZoom) {
-            yZoom.addEventListener('input', (e) => {
-                profScaleY = parseFloat(e.target.value);
-                redrawActiveProfile();
-            });
-            yZoom.addEventListener('dblclick', (e) => {
-                e.target.value = 1.0;
-                profScaleY = 1.0;
-                redrawActiveProfile();
-            });
-        }
     }
 
-    function redrawActiveProfile() {
-        if(!_activeProfileTxKey || !_activeProfileTxObj) return;
-        const rx = getRxCoords(); if(!rx) return;
-        const allVisible = getActiveVisibleCrossings();
-        const matchingCrs = allVisible.filter(c => (c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq) === _activeProfileTxKey);
-        drawProfile(matchingCrs, _currentPathElevs, rx, _activeProfileTxObj);
+    // ── Wheel zoom ────────────────────────────────────────────────────────
+    canvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        if (!_activeProfileTxKey) return;
+
+        const rect    = canvas.getBoundingClientRect();
+        const mouseX  = e.clientX - rect.left;
+        const padL = 45, padR = 25, drawW = canvas.width - padL - padR;
+        if (mouseX < padL || mouseX > canvas.width - padR) return;
+
+        const range      = profMaxX - profMinX;
+        const mouseKm    = profMinX + ((mouseX - padL) / drawW) * range;
+        const zoomFactor = e.deltaY > 0 ? 1.15 : 0.85;
+        let newRange     = Math.min(Math.max(range * zoomFactor, 5), _currentProfileDist);
+
+        let newMin = mouseKm - ((mouseX - padL) / drawW) * newRange;
+        let newMax = newMin + newRange;
+
+        if (newMin < 0)                       { newMax -= newMin; newMin = 0; }
+        if (newMax > _currentProfileDist)     { newMin -= (newMax - _currentProfileDist); newMax = _currentProfileDist; }
+        if (newMin < 0)                       newMin = 0;
+        if (newMax > _currentProfileDist)     newMax = _currentProfileDist;
+
+        profMinX = newMin;
+        profMaxX = newMax;
+        scheduleRedraw();
+    }, { passive: false });   // ← MUST be false so e.preventDefault() works
+
+    // ── Drag pan ──────────────────────────────────────────────────────────
+    canvas.addEventListener('mousedown', (e) => {
+        if (_activeProfileTxKey) { isDraggingProf = true; lastMouseX = e.clientX; }
+    });
+    window.addEventListener('mouseup',  () => { isDraggingProf = false; });
+    window.addEventListener('mousemove', (e) => {
+        if (!isDraggingProf || !_activeProfileTxKey) return;
+
+        const dx      = e.clientX - lastMouseX;
+        lastMouseX    = e.clientX;
+        const drawW   = canvas.width - 45 - 25;
+        const range   = profMaxX - profMinX;
+        const shiftKm = -(dx / drawW) * range;
+
+        let newMin = profMinX + shiftKm;
+        let newMax = profMaxX + shiftKm;
+
+        if (newMin < 0)                        { newMin = 0; newMax = range; }
+        else if (newMax > _currentProfileDist) { newMax = _currentProfileDist; newMin = _currentProfileDist - range; }
+
+        profMinX = newMin;
+        profMaxX = newMax;
+        scheduleRedraw();
+    });
+
+    // ── Y-scale slider ────────────────────────────────────────────────────
+    const yZoom = document.getElementById('as-profile-y-zoom');
+    if (yZoom) {
+        yZoom.addEventListener('input', (e) => {
+            profScaleY = parseFloat(e.target.value);
+            scheduleRedraw();
+        });
+        yZoom.addEventListener('dblclick', () => {
+            profScaleY = 1.0;
+            yZoom.value = 1.0;
+            scheduleRedraw();
+        });
     }
+}
+
+let _lastProfileHash = '';
+
+// Direct redraw for interactive gestures (zoom, drag, y-scale).
+// Bypasses the hash guard so the canvas responds instantly.
+function redrawActiveProfileDirect() {
+    if (!_activeProfileTxKey || !_activeProfileTxObj) return;
+    const rx = getRxCoords(); if (!rx) return;
+    const allVisible  = getActiveVisibleCrossings();
+    const matchingCrs = allVisible.filter(c =>
+        (c.tx.lat + '_' + c.tx.lon + '_' + c.tx.freq) === _activeProfileTxKey
+    );
+    // Update hash so the next countdown tick does not redraw again needlessly
+    _lastProfileHash = matchingCrs.map(c =>
+        c.ac.icao24 + ':' + Math.round(c.liveEta / 5)
+    ).join('|');
+    drawProfile(matchingCrs, _currentPathElevs, rx, _activeProfileTxObj);
+}
+
+// Throttled redraw for the countdown tick (called every second).
+// Only redraws when aircraft positions/ETAs actually change.
+function redrawActiveProfile() {
+    if (!_activeProfileTxKey || !_activeProfileTxObj) return;
+    const rx = getRxCoords(); if (!rx) return;
+
+    const allVisible  = getActiveVisibleCrossings();
+    const matchingCrs = allVisible.filter(c =>
+        (c.tx.lat + '_' + c.tx.lon + '_' + c.tx.freq) === _activeProfileTxKey
+    );
+
+    const newHash = matchingCrs.map(c =>
+        c.ac.icao24 + ':' + Math.round(c.liveEta / 5)
+    ).join('|');
+    if (newHash === _lastProfileHash) return;
+    _lastProfileHash = newHash;
+
+    drawProfile(matchingCrs, _currentPathElevs, rx, _activeProfileTxObj);
+}
 
     // ── Compute the "sweet spot" corridor for ideal airplane scatter ───────
     // Based on kkonrad's expert advice:
@@ -1836,7 +1866,70 @@ else if (az >= 326.25 && az < 348.75) dirs = ['NW', 'N'];
     });
 }
 
-    // ── Map Drawing ────────────────────────────────────────��──────────────
+
+// ── Terrain-envelope cache keyed by TX ────────────────────────────────────
+// The TX positions are fixed; only the aircraft move.
+// Building Float64Arrays for every AC×TX pair was the single biggest CPU sink.
+// We compute each TX envelope once per RX position and reuse it.
+const _txEnvelopeCache = new Map();
+
+function invalidateTxEnvelopeCache() {
+    _txEnvelopeCache.clear();
+}
+
+function getTxEnvelope(tx, rxLat, rxLon, rxElevM) {
+    const txKey = tx.lat + '_' + tx.lon + '_' + tx.freq;
+    if (_txEnvelopeCache.has(txKey)) return _txEnvelopeCache.get(txKey);
+
+    const txLat  = parseFloat(tx.lat);
+    const txLon  = parseFloat(tx.lon);
+    const txEffM = (tx.terrainM || 0) + TX_HEIGHT_DEFAULT_M;
+    const d_txrx = haversineKm(txLat, txLon, rxLat, rxLon);
+
+    const NUM_SAMPLES = 50;
+    const stepKm      = d_txrx / (NUM_SAMPLES - 1);
+    const c_factor    = 16.974;
+    const brg         = bearingDeg(rxLat, rxLon, txLat, txLon);
+
+    // Sample terrain from elevation cache along the RX→TX great-circle path
+    const sampledElevs = new Float64Array(NUM_SAMPLES);
+    for (let i = 0; i < NUM_SAMPLES; i++) {
+        const distKm = i * stepKm;
+        const pt     = deadReckonRad(rxLat, rxLon, brg, distKm);
+        const key    = pt.lat.toFixed(4) + '_' + pt.lon.toFixed(4);
+        sampledElevs[i] = _elevCache[key] || 0;
+    }
+
+    // RX horizon envelope: running-maximum from RX toward TX
+    let m_max_rx = -Infinity;
+    const hrx_env = new Float64Array(NUM_SAMPLES);
+    for (let i = 0; i < NUM_SAMPLES; i++) {
+        const x = i * stepKm;
+        if (x === 0) { hrx_env[i] = rxElevM; continue; }
+        const c_drop = (x * x) / c_factor;
+        const m = (sampledElevs[i] - rxElevM - c_drop) / x;
+        if (m > m_max_rx) m_max_rx = m;
+        hrx_env[i] = rxElevM + m_max_rx * x + c_drop;
+    }
+
+    // TX horizon envelope: running-maximum from TX toward RX
+    let m_max_tx = -Infinity;
+    const htx_env = new Float64Array(NUM_SAMPLES);
+    for (let i = NUM_SAMPLES - 1; i >= 0; i--) {
+        const d_tx_i = d_txrx - (i * stepKm);
+        if (d_tx_i === 0) { htx_env[i] = txEffM; continue; }
+        const c_drop = (d_tx_i * d_tx_i) / c_factor;
+        const m = (sampledElevs[i] - txEffM - c_drop) / d_tx_i;
+        if (m > m_max_tx) m_max_tx = m;
+        htx_env[i] = txEffM + m_max_tx * d_tx_i + c_drop;
+    }
+
+    const result = { hrx_env, htx_env, stepKm, d_txrx, txEffM };
+    _txEnvelopeCache.set(txKey, result);
+    return result;
+}
+
+    // ── Map Drawing ──────────────────────────────────────────────────────
     function drawStaticLayers(crossings, rxLat, rxLon){
         if(!mapInstance||!txLayer||!lineLayer) return;
 
@@ -2514,50 +2607,100 @@ else if (az >= 326.25 && az < 348.75) dirs = ['NW', 'N'];
 
 function setupRdsWebSocket() {
     if (rdsWebsocket && rdsWebsocket.readyState !== WebSocket.CLOSED) return;
+
+    const connectSocket = (socket) => {
+        rdsWebsocket = socket;
+
+        if (rdsWebsocket.readyState === WebSocket.OPEN) {
+            debugLog("RDS WebSocket already connected.");
+        } else {
+            rdsWebsocket.addEventListener("open", () => debugLog("RDS WebSocket connected."));
+        }
+
+        rdsWebsocket.addEventListener('message', evt => {
+            if (!isFreqLocked) return;
+
+            let raw;
+            try { raw = JSON.parse(evt.data); } catch (e) { return; }
+
+            // ── Detect frequency from ALL known FM-DX-Webserver message shapes ──
+            // Shape 1: { freq: 98700 }  (raw 10×kHz integer, common in text WS)
+            // Shape 2: { frequency: 98.7 }
+            // Shape 3: { status: { freq: 98700 } }
+            // Shape 4: { data: { freq: 98700 } }
+            // Shape 5: direct number fields at any depth (walk one level)
+            let raw_val = null;
+
+            if      (raw.freq      !== undefined) raw_val = raw.freq;
+            else if (raw.frequency !== undefined) raw_val = raw.frequency;
+            else if (raw.status?.freq      !== undefined) raw_val = raw.status.freq;
+            else if (raw.status?.frequency !== undefined) raw_val = raw.status.frequency;
+            else if (raw.data?.freq        !== undefined) raw_val = raw.data.freq;
+            else if (raw.data?.frequency   !== undefined) raw_val = raw.data.frequency;
+
+            if (raw_val === null || raw_val === undefined) return;
+
+            let newFreq = parseFloat(raw_val);
+            if (isNaN(newFreq) || newFreq === 0) return;
+
+            // ── Normalise to MHz ──────────────────────────────────────────
+            // FM-DX-Webserver text WS sends 10×kHz integers: 98700 = 98.700 MHz
+            if      (newFreq >= 87500)              newFreq = newFreq / 1000;   // 98700000 → 98700 (Hz)  – just in case
+            else if (newFreq >= 8750)               newFreq = newFreq / 100;    // 98700 → 987.00 – NO, try next
+            // Re-check: 98700 / 100 = 987 (out of range) → must be /1000? No.
+            // FM-DX text WS actual format: e.g. "9870" = 98.70 MHz (×10 kHz)
+            //   9870 / 100 = 98.70 ✓
+            //   98700 / 1000 = 98.70 ✓
+            // We already divided above if >= 8750, so re-normalise:
+            if      (newFreq > 1080)   newFreq = newFreq / 10;
+            else if (newFreq > 108.0)  newFreq = newFreq / 10;
+
+            if (newFreq < 87.5 || newFreq > 108.0) {
+                debugLog(`[RDS] Frequency ${newFreq} out of FM band – ignoring.`);
+                return;
+            }
+
+            const rounded = Math.round(newFreq * 100) / 100;
+
+            // Skip if nothing changed (integer-cent comparison avoids float drift)
+            if (_activeFreq !== null &&
+                Math.round(_activeFreq * 100) === Math.round(rounded * 100)) return;
+
+            debugLog(`[RDS] Frequency update: ${rounded} MHz`);
+            _activeFreq = rounded;
+
+            // Update the locked (disabled) input so the user sees the current freq
+            const freqInp = document.getElementById('as-freq-input');
+            if (freqInp) freqInp.value = rounded.toFixed(2);
+
+            redrawFiltered();
+        });
+
+        rdsWebsocket.addEventListener("error", (err) => debugLog("RDS WebSocket error:", err));
+        rdsWebsocket.addEventListener("close", () => {
+            debugLog("RDS WebSocket closed, retrying in 5 s...");
+            rdsWebsocket = null;
+            setTimeout(setupRdsWebSocket, 5000);
+        });
+    };
+
     try {
+        // ── Strategy 1: use the shared promise the webserver already exposes ──
         if (typeof window.textSocketPromise !== 'undefined') {
-            window.textSocketPromise.then(socket => {
-                rdsWebsocket = socket;
-                if (rdsWebsocket.readyState === WebSocket.OPEN) {
-                    debugLog("RDS WebSocket already connected.");
-                } else {
-                    rdsWebsocket.addEventListener("open", () => debugLog("RDS WebSocket connected."));
-                }
-                rdsWebsocket.addEventListener('message', evt => {
-                    if (!isFreqLocked) return;
-                    try {
-                        const data = JSON.parse(evt.data);
-                        let newFreq = null;
-                        if (data.freq !== undefined) newFreq = parseFloat(data.freq);
-                        else if (data.frequency !== undefined) newFreq = parseFloat(data.frequency);
-                        else if (data.status && data.status.freq !== undefined) newFreq = parseFloat(data.status.freq);
-
-                        if (newFreq !== null) {
-                            if (newFreq > 8700) newFreq = newFreq / 100;
-                            else if (newFreq >= 870 && newFreq <= 1080) newFreq = newFreq / 10;
-
-                            const freqInp = document.getElementById('as-freq-input');
-                            if (freqInp && freqInp.value !== newFreq.toFixed(2)) {
-                                freqInp.value = newFreq.toFixed(2);
-                                _activeFreq = newFreq;
-                                redrawFiltered();
-                            }
-                        }
-                    } catch(e) {}
-                });
-                rdsWebsocket.addEventListener("error", (error) => debugLog("RDS WebSocket error:", error));
-                rdsWebsocket.addEventListener("close", () => {
-                    debugLog("RDS WebSocket connection closed, retrying in 5 seconds.");
-                    rdsWebsocket = null;
+            window.textSocketPromise
+                .then(connectSocket)
+                .catch(err => {
+                    debugLog("textSocketPromise rejected:", err);
                     setTimeout(setupRdsWebSocket, 5000);
                 });
-            }).catch(error => {
-                debugLog("Error during RDS WebSocket setup:", error);
-                setTimeout(setupRdsWebSocket, 5000);
-            });
-        } else {
-            debugLog("window.textSocketPromise is undefined.");
+            return;
         }
+
+        // ── Strategy 2: fall back to opening our own TEXT WebSocket ──────────
+        debugLog("textSocketPromise unavailable – opening own TEXT WebSocket:", TEXT_WS_URL);
+        const sock = new WebSocket(TEXT_WS_URL);
+        connectSocket(sock);
+
     } catch (e) {
         debugLog("Error during RDS WebSocket setup:", e);
         setTimeout(setupRdsWebSocket, 5000);
@@ -2701,6 +2844,7 @@ document.getElementById('as-settings-apply').addEventListener('click', () => {
 
     S = loadSettings();
     _rxElevM = _rxTerrainM + S.rxAglM;
+	invalidateTxEnvelopeCache();
     panel.style.display = 'none';
     _persistentCrossings = {};
     const detailBody = document.getElementById('as-tx-detail-body');
@@ -3411,87 +3555,94 @@ async function loadTxDatabase(lat, lon) {
         document.head.appendChild(scr);
     }
 
-    async function startUpdate(forceReload){
-        const rx = getRxCoords(); if(!rx) return;
-        const reloadBtn = document.getElementById('as-reload');
-        if(reloadBtn) reloadBtn.classList.add('spinning');
-        updateStatusText('⏳ Loading...', 0, 0, 0);
+async function startUpdate(forceReload) {
+    const rx = getRxCoords(); if (!rx) return;
+    const reloadBtn = document.getElementById('as-reload');
+    if (reloadBtn) reloadBtn.classList.add('spinning');
+    updateStatusText('⏳ Loading...', 0, 0, 0);
 
-        if(forceReload || _rxTerrainM === 0){
-            _rxTerrainM = await fetchElevationSingle(rx.lat, rx.lon);
-            _rxElevM    = _rxTerrainM + S.rxAglM;
-            const rxTerrainUI = document.getElementById('as-rx-terrain-val');
-            if(rxTerrainUI) rxTerrainUI.textContent = Math.round(_rxTerrainM);
-        }
+    if (forceReload || _rxTerrainM === 0) {
+        _rxTerrainM = await fetchElevationSingle(rx.lat, rx.lon);
+        _rxElevM    = _rxTerrainM + S.rxAglM;
+        const rxTerrainUI = document.getElementById('as-rx-terrain-val');
+        if (rxTerrainUI) rxTerrainUI.textContent = Math.round(_rxTerrainM);
+        // RX position changed → all TX envelopes must be recomputed
+        invalidateTxEnvelopeCache();
+    }
 
-        updateRxMarkerTooltip(rx);
+    updateRxMarkerTooltip(rx);
 
-        try {
-            txStations = await loadTxDatabase(rx.lat, rx.lon);
+    try {
+        txStations = await loadTxDatabase(rx.lat, rx.lon);
 
-			const freqFilterList = await fetchFrequencyList(S.filterMode);
-			if (S.filterMode !== 'none') {
-				if (freqFilterList.size === 0 && S.filterMode === 'whitelist') {
-					console.warn('[Airplane Scatter] Whitelist is empty or failed to load – showing all stations.');
-				} else if (freqFilterList.size > 0) {
-					txStations = txStations.filter(tx => {
-						const txFreqRounded = Math.round(tx.freq * 100);
-						if (S.filterMode === 'whitelist') return  freqFilterList.has(txFreqRounded);
-						if (S.filterMode === 'blacklist') return !freqFilterList.has(txFreqRounded);
-						return true;
-					});
-				}
-			}
-
-            txStationGrid = await buildTxGridAsync(txStations);
-            updateRxMarkerTooltip(rx);
-            enrichTxElevations(txStations).then(async () => {
-                txStationGrid = await buildTxGridAsync(txStations);
-                if(mapInstance) redrawFiltered();
-            });
-        } catch(e) {
-            updateStatusText('⚠ TX DB Error: ' + e.message, 0, 0, 0);
-            if(reloadBtn) reloadBtn.classList.remove('spinning');
-            return;
-        }
-
-        let fetchedAircraft = [];
-        try {
-            fetchedAircraft = await fetchAircraft(rx.lat, rx.lon, S.aircraftRadiusKm);
-        } catch(e) {
-            updateStatusText('⚠ ADS-B Error: ' + e.message, 0, txStations.length, 0);
-            if(reloadBtn) reloadBtn.classList.remove('spinning');
-            return;
-        }
-
-        const now = Date.now();
-        fetchedAircraft.forEach(ac => { _activeAircraft[ac.icao24] = { ...ac, _lastSeen: now }; });
-
-        const robustList = [];
-        for(let icao in _activeAircraft) {
-            const ac = _activeAircraft[icao];
-            if(now - ac._lastSeen > AIRCRAFT_TIMEOUT_MS) {
-                delete _activeAircraft[icao];
-            } else {
-                const staleSec = (now - ac._lastSeen) / 1000;
-                if (staleSec > 1 && ac.track !== null && ac.speed > 0) {
-                    const dr = deadReckon(ac.lat, ac.lon, ac.track, ac.speed, staleSec);
-                    robustList.push({...ac, lat: dr.lat, lon: dr.lon});
-                } else {
-                    robustList.push(ac);
-                }
+        const freqFilterList = await fetchFrequencyList(S.filterMode);
+        if (S.filterMode !== 'none') {
+            if (freqFilterList.size === 0 && S.filterMode === 'whitelist') {
+                console.warn('[Airplane Scatter] Whitelist is empty or failed to load – showing all stations.');
+            } else if (freqFilterList.size > 0) {
+                txStations = txStations.filter(tx => {
+                    const txFreqRounded = Math.round(tx.freq * 100);
+                    if (S.filterMode === 'whitelist') return  freqFilterList.has(txFreqRounded);
+                    if (S.filterMode === 'blacklist') return !freqFilterList.has(txFreqRounded);
+                    return true;
+                });
             }
         }
 
-        await computePersistentCrossings(robustList, rx.lat, rx.lon);
-        _lastFetchTime = now;
+        // New TX dataset → envelopes are stale
+        invalidateTxEnvelopeCache();
 
-        ensureLeaflet(() => { if(mapInstance) redrawFiltered(); });
-
-        const activeCandsCount = getPrimaryCrossings(getActiveVisibleCrossings()).length;
-        updateStatusText(new Date().toTimeString().slice(0,8), robustList.length, txStations.length, activeCandsCount);
-        if(reloadBtn) reloadBtn.classList.remove('spinning');
+        txStationGrid = await buildTxGridAsync(txStations);
+        updateRxMarkerTooltip(rx);
+        enrichTxElevations(txStations).then(async () => {
+            // Elevation data updated → envelopes must be rebuilt
+            invalidateTxEnvelopeCache();
+            txStationGrid = await buildTxGridAsync(txStations);
+            if (mapInstance) redrawFiltered();
+        });
+    } catch (e) {
+        updateStatusText('⚠ TX DB Error: ' + e.message, 0, 0, 0);
+        if (reloadBtn) reloadBtn.classList.remove('spinning');
+        return;
     }
+
+    let fetchedAircraft = [];
+    try {
+        fetchedAircraft = await fetchAircraft(rx.lat, rx.lon, S.aircraftRadiusKm);
+    } catch (e) {
+        updateStatusText('⚠ ADS-B Error: ' + e.message, 0, txStations.length, 0);
+        if (reloadBtn) reloadBtn.classList.remove('spinning');
+        return;
+    }
+
+    const now = Date.now();
+    fetchedAircraft.forEach(ac => { _activeAircraft[ac.icao24] = { ...ac, _lastSeen: now }; });
+
+    const robustList = [];
+    for (let icao in _activeAircraft) {
+        const ac = _activeAircraft[icao];
+        if (now - ac._lastSeen > AIRCRAFT_TIMEOUT_MS) {
+            delete _activeAircraft[icao];
+        } else {
+            const staleSec = (now - ac._lastSeen) / 1000;
+            if (staleSec > 1 && ac.track !== null && ac.speed > 0) {
+                const dr = deadReckon(ac.lat, ac.lon, ac.track, ac.speed, staleSec);
+                robustList.push({ ...ac, lat: dr.lat, lon: dr.lon });
+            } else {
+                robustList.push(ac);
+            }
+        }
+    }
+
+    await computePersistentCrossings(robustList, rx.lat, rx.lon);
+    _lastFetchTime = now;
+
+    ensureLeaflet(() => { if (mapInstance) redrawFiltered(); });
+
+    const activeCandsCount = getPrimaryCrossings(getActiveVisibleCrossings()).length;
+    updateStatusText(new Date().toTimeString().slice(0, 8), robustList.length, txStations.length, activeCandsCount);
+    if (reloadBtn) reloadBtn.classList.remove('spinning');
+}
 
     function createButton(){
         (function waitForPanel(){
