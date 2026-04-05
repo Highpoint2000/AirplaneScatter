@@ -2450,37 +2450,57 @@ else if (az >= 326.25 && az < 348.75) dirs = ['NW', 'N'];
         }
     }
 
-    function setupRdsWebSocket() {
-        if (rdsWebsocket && rdsWebsocket.readyState !== WebSocket.CLOSED) return;
-        try {
-            rdsWebsocket = new WebSocket(TEXT_WS_URL);
-            rdsWebsocket.addEventListener('message', evt => {
-                if (!isFreqLocked) return;
-                try {
-                    const data = JSON.parse(evt.data);
-                    let newFreq = null;
-                    if (data.freq !== undefined) newFreq = parseFloat(data.freq);
-                    else if (data.frequency !== undefined) newFreq = parseFloat(data.frequency);
-                    else if (data.status && data.status.freq !== undefined) newFreq = parseFloat(data.status.freq);
+function setupRdsWebSocket() {
+    if (rdsWebsocket && rdsWebsocket.readyState !== WebSocket.CLOSED) return;
+    try {
+        if (typeof window.textSocketPromise !== 'undefined') {
+            window.textSocketPromise.then(socket => {
+                rdsWebsocket = socket;
+                if (rdsWebsocket.readyState === WebSocket.OPEN) {
+                    debugLog("RDS WebSocket already connected.");
+                } else {
+                    rdsWebsocket.addEventListener("open", () => debugLog("RDS WebSocket connected."));
+                }
+                rdsWebsocket.addEventListener('message', evt => {
+                    if (!isFreqLocked) return;
+                    try {
+                        const data = JSON.parse(evt.data);
+                        let newFreq = null;
+                        if (data.freq !== undefined) newFreq = parseFloat(data.freq);
+                        else if (data.frequency !== undefined) newFreq = parseFloat(data.frequency);
+                        else if (data.status && data.status.freq !== undefined) newFreq = parseFloat(data.status.freq);
 
-                    if (newFreq !== null) {
-                        if (newFreq > 8700) newFreq = newFreq / 100;
-                        else if (newFreq >= 870 && newFreq <= 1080) newFreq = newFreq / 10;
+                        if (newFreq !== null) {
+                            if (newFreq > 8700) newFreq = newFreq / 100;
+                            else if (newFreq >= 870 && newFreq <= 1080) newFreq = newFreq / 10;
 
-                        const freqInp = document.getElementById('as-freq-input');
-                        if (freqInp && freqInp.value !== newFreq.toFixed(2)) {
-                            freqInp.value = newFreq.toFixed(2);
-                            _activeFreq = newFreq;
-                            redrawFiltered();
+                            const freqInp = document.getElementById('as-freq-input');
+                            if (freqInp && freqInp.value !== newFreq.toFixed(2)) {
+                                freqInp.value = newFreq.toFixed(2);
+                                _activeFreq = newFreq;
+                                redrawFiltered();
+                            }
                         }
-                    }
-                } catch(e) {}
+                    } catch(e) {}
+                });
+                rdsWebsocket.addEventListener("error", (error) => debugLog("RDS WebSocket error:", error));
+                rdsWebsocket.addEventListener("close", () => {
+                    debugLog("RDS WebSocket connection closed, retrying in 5 seconds.");
+                    rdsWebsocket = null;
+                    setTimeout(setupRdsWebSocket, 5000);
+                });
+            }).catch(error => {
+                debugLog("Error during RDS WebSocket setup:", error);
+                setTimeout(setupRdsWebSocket, 5000);
             });
-            rdsWebsocket.addEventListener('close', () => setTimeout(setupRdsWebSocket, 5000));
-        } catch (e) {
-            debugLog("Error during RDS WebSocket setup:", e);
+        } else {
+            debugLog("window.textSocketPromise is undefined.");
         }
+    } catch (e) {
+        debugLog("Error during RDS WebSocket setup:", e);
+        setTimeout(setupRdsWebSocket, 5000);
     }
+}
 
     // ── Settings UI ───────────────────────────────────────────────────────
     function buildSettingsPanelHtml(){
