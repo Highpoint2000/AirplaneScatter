@@ -1,8 +1,8 @@
 ////////////////////////////////////////////////////////////////
 //                                                            //
-//  AIRPLANE SCATTER SERVER PLUGIN FOR FM-DX-WEBSERVER (V2.1a)//
+//  AIRPLANE SCATTER SERVER PLUGIN FOR FM-DX-WEBSERVER (V2.2) //
 //                                                            //
-//  by Highpoint                last update: 2026-04-05       //
+//  by Highpoint                last update: 2026-04-06       //
 //                                                            //
 //  https://github.com/Highpoint2000/AirplaneScatter          //
 //                                                            //
@@ -45,7 +45,7 @@ try {
 // ── Plugin registration ────────────────────────────────────────────────────
 const pluginConfig = {
     name:         'Airplane Scatter',
-    version:      '2.1a',
+    version:      '2.2',
     frontEndPath: 'airplanescatter.js',
 };
 module.exports = { pluginConfig };
@@ -480,7 +480,7 @@ async function handleFmdxRequest(req, res) {
 }
 
 // ── Files to sync from plugin dir → all public dirs ───────────────────────
-const FILES_TO_SYNC = ['blacklist.txt', 'whitelist.txt'];
+const FILES_TO_SYNC = ['blacklist.txt', 'whitelist.txt', 'userlist1.csv'];
 
 const PUBLIC_DIRS = [
     path.join(__dirname, '..', '..', 'public', 'plugins', 'AirplaneScatter'),

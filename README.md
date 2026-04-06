@@ -5,9 +5,11 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 <img width="500" height="460" alt="grafik" src="https://github.com/user-attachments/assets/4c24cf61-60cf-43ca-954e-55868b6344b7" />
 <img width="310" height="440" alt="grafik" src="https://github.com/user-attachments/assets/59e1bb3d-b202-4b7d-958d-3106a321d547" />
 
-## Version 2.1a (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
+## Version 2.2 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 
-- Performance-Optimierung und Bugfixing
+- Integration of the fmscan.org database file userlist1.csv to display additional information and the transmitter's radiation direction (optical display + score influence)
+- Fixed error in compass filter (NE/E selection)
+- Websocket connection of the plugin has been revised
 
 ## Installation notes
 
@@ -30,6 +32,12 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 - For equalizing/denoising the audio signals in scatter mode, the use of the AI ​​Denoiser is recommended: https://github.com/Highpoint2000/AI-Denoise
 - To decode RDS as quickly as possible during short-term receptions, the use of the RDS AI decoder is recommended: https://github.com/Highpoint2000/RDS-AI-Decoder
 
+## FMSCAN.ORG Integration
+
+Integration of the fmscan.org database file userlist1.csv to display additional information and the transmitter's radiation direction (optical display + score influence):
+
+
+
 ## Blacklist and Whitelist Options
 
 To exclude locally used frequencies, the plugin offers a blacklist and whitelist function. The required TXT files must be located in the plugin folder (sample files are included in the current plugin package). In the "whitelist.txt" file, you can store frequencies (e.g., 89.800, 89.400, 100.80) that should be considered exclusively during processing. In the "blacklist.txt" file, you define frequencies that should be excluded from processing. You can configure which filter list should be active in the plugin settings.
@@ -42,6 +50,10 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### Version 2.1a (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
+
+- Performance-Optimierung und Bugfixing
 
 ### Version 2.1 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 
