@@ -37,12 +37,19 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 Use the userlist1.csv to display additional information and the transmitter's radiation direction (optical display + score influence):
 
 - Download userlist1.csv from after logging in at fmscan.org (account required)
-- In the menu, go to FMSCAN → Tools (userlist etc.), select mode “FM+ (Tropo)”, choose CSV format, set separator to semicolon, then click DOWNLOAD userlist1.csv
+- In the menu, go to FMSCAN → Tools (userlist etc.) → Perseus / Globaltuners / SDR Console Location Search, select mode “FM+ (Tropo)”, choose CSV format, set separator to semicolon, then click DOWNLOAD userlist1.csv
 - Place the downloaded file in the plugin directory …/fm-dx-webserver-main/plugins/AirplaneScatter/userlist1.csv
 - Restart the FM-DX Webserver, then reload your browser. The plugin will automatically detect and load the file at startup
 - If the file is missing, the system will continue working normally using only fmdx.org data without the userlist enhancements
 
 You can find more information in the documentation!
+
+<img width="320" height="240" alt="grafik" src="https://github.com/user-attachments/assets/3ffe3d78-ffb5-45f1-ada2-7af4b4572509" />
+<img width="320" height="240" alt="grafik" src="https://github.com/user-attachments/assets/ef6f4d04-f4d5-49f5-8d6a-3bb77dddad3a" />
+<img width="320" height="249" alt="grafik" src="https://github.com/user-attachments/assets/afbf0bfa-5f44-41f6-b724-c9a0a392438c" />
+
+
+
 
 ## Blacklist and Whitelist Options
 
