@@ -2,7 +2,7 @@
 Predicts and visualizes real-time airplane scatter opportunities for FM radio reception by combining live ADS-B flight tracking with transmitter databases and elevation profiles.
 
 <img width="2000" height="836" alt="grafik" src="https://github.com/user-attachments/assets/72607b3a-b034-40a6-ae90-551c11e016bd" />
-<img width="500" height="460" alt="grafik" src="https://github.com/user-attachments/assets/4c24cf61-60cf-43ca-954e-55868b6344b7" />
+<img width="500" height="460" alt="grafik" src="https://github.com/user-attachments/assets/16e2753f-28fb-46b9-8019-2ac81752dfb5" />
 <img width="310" height="440" alt="grafik" src="https://github.com/user-attachments/assets/59e1bb3d-b202-4b7d-958d-3106a321d547" />
 
 ## Version 2.2 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
@@ -32,11 +32,17 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 - For equalizing/denoising the audio signals in scatter mode, the use of the AI ​​Denoiser is recommended: https://github.com/Highpoint2000/AI-Denoise
 - To decode RDS as quickly as possible during short-term receptions, the use of the RDS AI decoder is recommended: https://github.com/Highpoint2000/RDS-AI-Decoder
 
-## FMSCAN.ORG Integration
+## FMSCAN.ORG Integration / How to download and install the userlist1.csv
 
-Integration of the fmscan.org database file userlist1.csv to display additional information and the transmitter's radiation direction (optical display + score influence):
+Use the userlist1.csv to display additional information and the transmitter's radiation direction (optical display + score influence):
 
+- Download userlist1.csv from after logging in at fmscan.org (account required)
+- In the menu, go to FMSCAN → Tools (userlist etc.), select mode “FM+ (Tropo)”, choose CSV format, set separator to semicolon, then click DOWNLOAD userlist1.csv
+- Place the downloaded file in the plugin directory …/fm-dx-webserver-main/plugins/AirplaneScatter/userlist1.csv
+- Restart the FM-DX Webserver, then reload your browser. The plugin will automatically detect and load the file at startup
+- If the file is missing, the system will continue working normally using only fmdx.org data without the userlist enhancements
 
+You can find more information in the documentation!
 
 ## Blacklist and Whitelist Options
 
