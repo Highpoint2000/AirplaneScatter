@@ -1,8 +1,8 @@
 # Airplane Scatter
 Predicts and visualizes real-time airplane scatter opportunities for FM radio reception by combining live ADS-B flight tracking with transmitter databases and elevation profiles.
 
-<img width="2000" height="836" alt="grafik" src="https://github.com/user-attachments/assets/72607b3a-b034-40a6-ae90-551c11e016bd" />
-<img width="500" height="460" alt="grafik" src="https://github.com/user-attachments/assets/16e2753f-28fb-46b9-8019-2ac81752dfb5" />
+<img width="2094" height="826" alt="grafik" src="https://github.com/user-attachments/assets/4cb9993f-6bc8-46d4-8971-4d57121ce4e6" />
+<img width="500" height="480" alt="grafik" src="https://github.com/user-attachments/assets/3c5f25a6-2b73-4b8d-9394-1b1016d3d9c4" />
 <img width="310" height="440" alt="grafik" src="https://github.com/user-attachments/assets/59e1bb3d-b202-4b7d-958d-3106a321d547" />
 
 ## Version 2.3 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
