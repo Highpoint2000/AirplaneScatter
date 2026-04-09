@@ -5,11 +5,11 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 <img width="500" height="460" alt="grafik" src="https://github.com/user-attachments/assets/16e2753f-28fb-46b9-8019-2ac81752dfb5" />
 <img width="310" height="440" alt="grafik" src="https://github.com/user-attachments/assets/59e1bb3d-b202-4b7d-958d-3106a321d547" />
 
-## Version 2.2 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
+## Version 2.3 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 
-- Integration of the fmscan.org database file userlist1.csv to display additional information and the transmitter's radiation direction (optical display + score influence)
-- Fixed error in compass filter (NE/E selection)
-- Websocket connection of the plugin has been revised
+- Important performance improvements, audio dropouts fixed
+- Added additional sweet spot marker to the map
+- Added display of airplane photos
 
 ## Installation notes
 
@@ -63,6 +63,12 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+## Version 2.2 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
+
+- Integration of the fmscan.org database file userlist1.csv to display additional information and the transmitter's radiation direction (optical display + score influence)
+- Fixed error in compass filter (NE/E selection)
+- Websocket connection of the plugin has been revised
 
 ### Version 2.1a (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 

@@ -1,12 +1,12 @@
-////////////////////////////////////////////////////////////////
-//                                                            //
-//  AIRPLANE SCATTER SERVER PLUGIN FOR FM-DX-WEBSERVER (V2.2) //
-//                                                            //
-//  by Highpoint                last update: 2026-04-06       //
-//                                                            //
-//  https://github.com/Highpoint2000/AirplaneScatter          //
-//                                                            //
-////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////
+//                                                             //
+//  AIRPLANE SCATTER SERVER PLUGIN FOR FM-DX-WEBSERVER (V2.3)  //
+//                                                             //
+//  by Highpoint                last update: 2026-04-09        //
+//                                                             //
+//  https://github.com/Highpoint2000/AirplaneScatter           //
+//                                                             //
+/////////////////////////////////////////////////////////////////
 
 const fs      = require('fs');
 const path    = require('path');
@@ -45,7 +45,7 @@ try {
 // ── Plugin registration ────────────────────────────────────────────────────
 const pluginConfig = {
     name:         'Airplane Scatter',
-    version:      '2.2',
+    version:      '2.3',
     frontEndPath: 'airplanescatter.js',
 };
 module.exports = { pluginConfig };
@@ -396,13 +396,23 @@ function ensureFmdxData(lat, lon) {
 }
 
 // ── Server-side filter ─────────────────────────────────────────────────────
-function filterStations(rawDb, lat, lon, radiusKm, minErpKw) {
+async function filterStationsAsync(rawDb, lat, lon, radiusKm, minErpKw) {
     const locs     = rawDb.locations || rawDb;
     const latDelta = radiusKm / 111.0;
     const lonDelta = radiusKm / Math.max(0.1, Math.abs(111.0 * Math.cos(lat * Math.PI / 180)));
     const stations = [];
 
-    for (const locId of Object.keys(locs)) {
+    const keys = Object.keys(locs);
+    let lastYield = performance.now();
+
+    for (let i = 0; i < keys.length; i++) {
+        // Yield to the Node.js event loop every 5ms so audio WebSockets don't starve
+        if (performance.now() - lastYield > 5) {
+            await new Promise(resolve => setImmediate(resolve));
+            lastYield = performance.now();
+        }
+
+        const locId = keys[i];
         const loc    = locs[locId];
         if (!loc || !Array.isArray(loc.stations)) continue;
         const locLat = parseFloat(loc.lat);
@@ -461,7 +471,10 @@ async function handleFmdxRequest(req, res) {
         }
 
         const rawDb        = await ensureFmdxData(lat, lon);
-        const stations     = filterStations(rawDb, lat, lon, radiusKm, minErpKw);
+        
+        // Use the new Async yielding filter function here
+        const stations     = await filterStationsAsync(rawDb, lat, lon, radiusKm, minErpKw);
+        
         const responseJson = JSON.stringify(stations);
 
         logInfo(`FMDX /fmdx: ${stations.length} stations (${(responseJson.length / 1024).toFixed(1)} KB) for QTH ${lat.toFixed(3)},${lon.toFixed(3)}.`);
