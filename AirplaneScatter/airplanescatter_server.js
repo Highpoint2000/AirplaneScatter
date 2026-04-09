@@ -1,6 +1,6 @@
 /////////////////////////////////////////////////////////////////
 //                                                             //
-//  AIRPLANE SCATTER SERVER PLUGIN FOR FM-DX-WEBSERVER (V2.3)  //
+//  AIRPLANE SCATTER SERVER PLUGIN FOR FM-DX-WEBSERVER (V2.3a) //
 //                                                             //
 //  by Highpoint                last update: 2026-04-09        //
 //                                                             //
@@ -45,7 +45,7 @@ try {
 // ── Plugin registration ────────────────────────────────────────────────────
 const pluginConfig = {
     name:         'Airplane Scatter',
-    version:      '2.3',
+    version:      '2.3a',
     frontEndPath: 'airplanescatter.js',
 };
 module.exports = { pluginConfig };

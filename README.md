@@ -7,9 +7,8 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 
 ## Version 2.3 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 
-- Important performance improvements, audio dropouts fixed
-- Added additional sweet spot marker to the map
-- Added display of airplane photos
+- Airplane Photo display can now be enabled and disabled in the settings
+- Function to automatically move the web server to the right added to the settings (thanks to bojcha for the idea & code)
 
 ## Installation notes
 
@@ -63,6 +62,12 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+## Version 2.3 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
+
+- Important performance improvements, audio dropouts fixed
+- Added additional sweet spot marker to the map
+- Added display of airplane photos
 
 ## Version 2.2 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 

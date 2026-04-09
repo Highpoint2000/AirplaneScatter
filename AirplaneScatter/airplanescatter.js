@@ -1,6 +1,6 @@
 /////////////////////////////////////////////////////////////////
 //                                                             //
-//  AIRPLANE SCATTER CLIENT PLUGIN FOR FM-DX-WEBSERVER (V2.3)  //
+//  AIRPLANE SCATTER CLIENT PLUGIN FOR FM-DX-WEBSERVER (V2.3a) //
 //                                                             //
 //  by Highpoint                last update: 2026-04-09        //
 //                                                             //
@@ -11,7 +11,7 @@
 (() => {
 
     // ── Plugin metadata & Update Check ────────────────────────────────────
-    const pluginVersion     = "2.3";
+    const pluginVersion     = "2.3a";
     const pluginName        = "Airplane Scatter";
     const pluginHomepageUrl = "https://github.com/highpoint2000/AirplaneScatter/releases";
     const pluginUpdateUrl   = "https://raw.githubusercontent.com/Highpoint2000/AirplaneScatter/refs/heads/main/AirplaneScatter/airplanescatter.js";
@@ -69,9 +69,9 @@
     const FORECAST_STEPS_SEC     = [0, 60, 120, 180, 300];
     const AIRCRAFT_TIMEOUT_MS    = 180000;
 
-const AIRCRAFT_UPDATE_MS     = 15000;
-const AIRCRAFT_MARKER_MIN_MOVE_MS = 250;
-const COUNTDOWN_TICK_MS      = 1000;
+    const AIRCRAFT_UPDATE_MS     = 15000;
+    const AIRCRAFT_MARKER_MIN_MOVE_MS = 250;
+    const COUNTDOWN_TICK_MS      = 1000;
     const DB_CACHE_HOURS         = 24;
     const SCORE_EXCELLENT        = 80;
     const SCORE_HIGH             = 60;
@@ -124,6 +124,7 @@ const COUNTDOWN_TICK_MS      = 1000;
     }
 
     function loadSettings() {
+        const storedPhotos = localStorage.getItem('as_show_photos');
         return {
             minTxRxDistKm   : getInt(localStorage.getItem('as_min_txrx_dist'), 400),
             minTxErpKw      : getInt(localStorage.getItem('as_min_erp'), 100),
@@ -132,6 +133,8 @@ const COUNTDOWN_TICK_MS      = 1000;
             minScore        : getInt(localStorage.getItem('as_min_score'), 70),
             rxAglM          : getInt(localStorage.getItem('as_rx_agl'), 10),
             useMetric       : localStorage.getItem('as_use_metric') !== 'false',
+            showPhotos      : storedPhotos !== 'false', 
+            autoRightAlign  : localStorage.getItem('as_auto_right_align') === 'true', // Default false
             leadTimeSec     : parseTimeStr(localStorage.getItem('as_lead_time_str'), 180),
             trailTimeSec    : parseTimeStr(localStorage.getItem('as_trail_time_str'), 60),
             filterMode      : localStorage.getItem('as_filter_mode') || 'none',
@@ -141,26 +144,23 @@ const COUNTDOWN_TICK_MS      = 1000;
     let S = loadSettings();
 
     // ── Aircraft category filter ───────────────────────────────────────────
-function meetsAcTypeFilter(ac) {
-    if (!S.acTypeFilter || S.acTypeFilter === 'all') return true;
-    if (!ac.category) return false;
-    const cat = ac.category.toString().toUpperCase().trim();
-    // Extract numeric part: A1→1, A2→2, ... A5→5
-    const match = cat.match(/^A(\d)$/);
-    if (!match) return false;
-    const acNum = parseInt(match[1], 10);
-    // Filter setting is the minimum category (e.g. 'A3' means A3, A4, A5+)
-    const filterMatch = S.acTypeFilter.match(/^A(\d)$/);
-    if (!filterMatch) return false;
-    const minNum = parseInt(filterMatch[1], 10);
-    return acNum >= minNum;
-}
+    function meetsAcTypeFilter(ac) {
+        if (!S.acTypeFilter || S.acTypeFilter === 'all') return true;
+        if (!ac.category) return false;
+        const cat = ac.category.toString().toUpperCase().trim();
+        const match = cat.match(/^A(\d)$/);
+        if (!match) return false;
+        const acNum = parseInt(match[1], 10);
+        const filterMatch = S.acTypeFilter.match(/^A(\d)$/);
+        if (!filterMatch) return false;
+        const minNum = parseInt(filterMatch[1], 10);
+        return acNum >= minNum;
+    }
 
     let isAdminLoggedIn = false;
     let isTuneLoggedIn = false;
     let isLockAuthenticated = true;
 
-    // Global helper function to send the Rotor position
     window._asSendRotorPosition = function(position) {
         if (!isAdminLoggedIn && !isTuneLoggedIn) {
             debugLog('Rotor turn rejected: Not authorized.');
@@ -370,14 +370,14 @@ function meetsAcTypeFilter(ac) {
     ];
 
     function getCustomCategory(type) {
-        if (!type) return "A1"; // Unknown / Light
+        if (!type) return "A1"; 
         const t = type.toUpperCase();
         
-        if (t === "A388" || t === "A225") return "A5"; // Super Heavy
-        if (HEAVY_AIRCRAFT.includes(t)) return "A4";   // Heavy
-        if (MEDIUM_AIRCRAFT.includes(t)) return "A3";  // Large / Medium
+        if (t === "A388" || t === "A225") return "A5"; 
+        if (HEAVY_AIRCRAFT.includes(t)) return "A4";   
+        if (MEDIUM_AIRCRAFT.includes(t)) return "A3";  
         
-        return "A2"; // Small (Fallback for other identified types)
+        return "A2"; 
     }
 
     // ── Frequency Filter Lists ───────────────────────────────────────────
@@ -393,18 +393,55 @@ function meetsAcTypeFilter(ac) {
                 return new Set();
             }
             const text = await res.text();
-			const freqs = text.split('\n')
-				.map(l => l.trim().replace(',', '.').replace(/\s.*$/, ''))
-				.filter(l => l !== '' && !l.startsWith('#'))                 
-				.map(l => parseFloat(l))
-				.filter(f => !isNaN(f) && f >= 87.5 && f <= 108.0);       
-			return new Set(freqs.map(f => Math.round(f * 100)));
+            const freqs = text.split('\n')
+                .map(l => l.trim().replace(',', '.').replace(/\s.*$/, ''))
+                .filter(l => l !== '' && !l.startsWith('#'))                 
+                .map(l => parseFloat(l))
+                .filter(f => !isNaN(f) && f >= 87.5 && f <= 108.0);       
+            return new Set(freqs.map(f => Math.round(f * 100)));
         } catch(e) {
             console.warn(`[Airplane Scatter] Failed to fetch ${fileName}:`, e);
             return new Set();
         }
     }
 
+    // ── Right Align Support Function ─────────────────────────────────────
+    function applyRightAlign(active) {
+        if (active && S.autoRightAlign) {
+            document.body.classList.add("align-right");
+            
+            if (!document.getElementById('as-rightalign-style')) {
+                const styleEl = document.createElement('style');
+                styleEl.id = 'as-rightalign-style';
+                styleEl.innerHTML = `
+                    body.align-right .wrapper-outer.dashboard-panel { justify-content: center !important; align-items: flex-end !important; padding-right: 10px !important; }
+                    body.align-right .wrapper-outer.main-content { justify-content: center !important; align-items: flex-end !important; padding-right: 3px !important; }
+                    body.align-right #wrapper { margin-right: 0px !important; }
+                    body.align-right #dashboard-panel-description { margin-left: auto !important; margin-right: 10px !important; left: auto !important; right: 0 !important; }
+                `;
+                document.head.appendChild(styleEl);
+            }
+
+            const desc = document.getElementById("dashboard-panel-description");
+            if (desc) {
+                desc.style.left = "auto";
+                desc.style.right = "0";
+                desc.style.transform = "translateX(-3px)";
+                desc.style.marginLeft = "0";
+                desc.style.marginRight = "0";
+            }
+        } else {
+            document.body.classList.remove("align-right");
+            const desc = document.getElementById("dashboard-panel-description");
+            if (desc) {
+                desc.style.left = "";
+                desc.style.right = "";
+                desc.style.transform = "";
+                desc.style.marginLeft = "";
+                desc.style.marginRight = "";
+            }
+        }
+    }
     // ── State ────────────────────────────────────────────────────────────
     let mapActive            = false;
     let mapContainer         = null;
@@ -437,7 +474,7 @@ function meetsAcTypeFilter(ac) {
     let isFreqLocked         = false;
     let isCompassLocked      = false;
     let lastRotorAzimuth     = null;
-	let _activeTxObj         = null;
+    let _activeTxObj         = null;
 
     const clientId = Math.random().toString(36).substring(2);
 
@@ -632,7 +669,7 @@ function meetsAcTypeFilter(ac) {
     `;
     document.head.appendChild(style);
 
-        // ── Geo helpers ───────────────────────────────────────────────────────
+    // ── Geo helpers ───────────────────────────────────────────────────────
     const PI_180 = Math.PI / 180;
     const toRad = d => d * PI_180;
     const toDeg = r => r / PI_180;
@@ -766,34 +803,32 @@ function meetsAcTypeFilter(ac) {
         return { startDist, endDist };
     }
 
-const _txSiblingCache = new Map();
+    const _txSiblingCache = new Map();
 
-function txSiblings(tx) {
-    const key = tx.lat + '|' + tx.lon;
+    function txSiblings(tx) {
+        const key = tx.lat + '|' + tx.lon;
 
-    if (_txSiblingCache.has(key)) {
-        return _txSiblingCache.get(key);
+        if (_txSiblingCache.has(key)) {
+            return _txSiblingCache.get(key);
+        }
+
+        const siblings = txStations
+            .filter(t => Math.abs(t.lat - tx.lat) < 0.0001 && Math.abs(t.lon - tx.lon) < 0.0001)
+            .sort((a, b) => b.erp - a.erp);
+
+        _txSiblingCache.set(key, siblings);
+        return siblings;
     }
 
-    const siblings = txStations
-        .filter(t => Math.abs(t.lat - tx.lat) < 0.0001 && Math.abs(t.lon - tx.lon) < 0.0001)
-        .sort((a, b) => b.erp - a.erp);
-
-    _txSiblingCache.set(key, siblings);
-    return siblings;
-}
-
-// 10° grid cells instead of 5° → 2×2 = 4 lookups instead of 3×3 = 9
-function gridKey(lat, lon) {
-    return Math.floor(lat / 10) + '_' + Math.floor(lon / 10);
-}
+    // 10° grid cells instead of 5° → 2×2 = 4 lookups instead of 3×3 = 9
+    function gridKey(lat, lon) {
+        return Math.floor(lat / 10) + '_' + Math.floor(lon / 10);
+    }
 
     async function buildTxGridAsync(stations) {
         const g = {};
         let lastYield = performance.now();
         for (let i = 0; i < stations.length; i++) {
-            // Optimization: Yield more frequently (every 5ms instead of 10ms)
-            // and actually pause for 2ms to unblock the audio pipeline on weak CPUs.
             if (performance.now() - lastYield > 5) {
                 await new Promise(r => setTimeout(r, 2));
                 lastYield = performance.now();
@@ -806,221 +841,209 @@ function gridKey(lat, lon) {
         return g;
     }
 
-function nearbyTx(acLat, acLon) {
-    const r = [];
-    // 2×2 neighbourhood covers the full TX search radius at any grid position
-    for (let dlat = -1; dlat <= 1; dlat++) {
-        for (let dlon = -1; dlon <= 1; dlon++) {
-            const k = (Math.floor(acLat / 10) + dlat) + '_' + (Math.floor(acLon / 10) + dlon);
-            if (txStationGrid[k]) r.push(...txStationGrid[k]);
+    function nearbyTx(acLat, acLon) {
+        const r = [];
+        for (let dlat = -1; dlat <= 1; dlat++) {
+            for (let dlon = -1; dlon <= 1; dlon++) {
+                const k = (Math.floor(acLat / 10) + dlat) + '_' + (Math.floor(acLon / 10) + dlon);
+                if (txStationGrid[k]) r.push(...txStationGrid[k]);
+            }
         }
+        return r;
     }
-    return r;
-}
 
-// ── Scoring Helpers ───────────────────────────────────────────────────   
+    // ── Scoring Helpers ───────────────────────────────────────────────────   
 
-let _userlistDb = {};   // keyed by id (last field)
-let _userlistGeoIndex = {}; // Fast fallback lookup map by frequency and rough location
-let _userlistLoaded = false;
+    let _userlistDb = {};
+    let _userlistGeoIndex = {};
+    let _userlistLoaded = false;
 
-async function loadUserlist() {
-    if (_userlistLoaded) return;
-    const url = `${currentURL.protocol}//${currentURL.host}/plugins/AirplaneScatter/userlist1.csv?t=${Date.now()}`;
-    try {
-        const res = await fetch(url, { cache: 'no-store' });
-        if (!res.ok || !res.body) { debugLog('userlist1.csv not found or streaming not supported'); return; }
-        
-        _userlistDb = {};
-        _userlistGeoIndex = {};
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        let remainder = '';
-
-        while (true) {
-            // Read chunk from network
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = (remainder + chunk).split('\n');
+    async function loadUserlist() {
+        if (_userlistLoaded) return;
+        const url = `${currentURL.protocol}//${currentURL.host}/plugins/AirplaneScatter/userlist1.csv?t=${Date.now()}`;
+        try {
+            const res = await fetch(url, { cache: 'no-store' });
+            if (!res.ok || !res.body) { debugLog('userlist1.csv not found or streaming not supported'); return; }
             
-            // Keep the last incomplete line for the next chunk
-            remainder = lines.pop(); 
+            _userlistDb = {};
+            _userlistGeoIndex = {};
 
-            let lastYield = performance.now();
-            for (let i = 0; i < lines.length; i++) {
-                // Yield very aggressively (every 3ms)
-                if (performance.now() - lastYield > 3) {
-                    await new Promise(r => setTimeout(r, 2));
-                    lastYield = performance.now();
-                }
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let remainder = '';
 
-                let line = lines[i].trim();
-                if (!line || line.charCodeAt(0) === 35) continue; // 35 is '#'
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = (remainder + chunk).split('\n');
                 
-                const f = line.split(';');
-                if (f.length < 18) continue;
-                
-                const id = f[f.length - 1].trim();
-                if (!id) continue;
+                remainder = lines.pop(); 
 
-                const lat = parseFloat(f[6]);
-                const lon = parseFloat(f[7]);
-                const khz = f[0].trim();
+                let lastYield = performance.now();
+                for (let i = 0; i < lines.length; i++) {
+                    if (performance.now() - lastYield > 3) {
+                        await new Promise(r => setTimeout(r, 2));
+                        lastYield = performance.now();
+                    }
 
-                const entry = {
-                    khz:     khz,
-                    itu:     f[1].trim(),
-                    lang:    f[2].trim(),
-                    program: f[3].trim(),
-                    mod:     f[4].trim(),
-                    city:    f[5].trim(),
-                    lat:     lat,
-                    lon:     lon,
-                    erpToRx: f[8].trim(),
-                    erpMax:  f[9].trim(),
-                    beam:    f[10].trim(),
-                    dist:    f[11].trim(),
-                    azimuth: f[12].trim(),
-                    db:      f[13].trim(),
-                    ps:      f[14].trim(),
-                    pi:      f[15].trim(),
-                    pol:     f[16].trim(),
-                    id:      id,
-                };
-                
-                _userlistDb[id] = entry;
+                    let line = lines[i].trim();
+                    if (!line || line.charCodeAt(0) === 35) continue;
+                    
+                    const f = line.split(';');
+                    if (f.length < 18) continue;
+                    
+                    const id = f[f.length - 1].trim();
+                    if (!id) continue;
 
-                if (!isNaN(lat) && !isNaN(lon)) {
-                    const geoKey = `${parseInt(khz, 10)}_${lat.toFixed(1)}_${lon.toFixed(1)}`;
-                    if (!_userlistGeoIndex[geoKey]) _userlistGeoIndex[geoKey] = [];
-                    _userlistGeoIndex[geoKey].push(entry);
+                    const lat = parseFloat(f[6]);
+                    const lon = parseFloat(f[7]);
+                    const khz = f[0].trim();
+
+                    const entry = {
+                        khz:     khz,
+                        itu:     f[1].trim(),
+                        lang:    f[2].trim(),
+                        program: f[3].trim(),
+                        mod:     f[4].trim(),
+                        city:    f[5].trim(),
+                        lat:     lat,
+                        lon:     lon,
+                        erpToRx: f[8].trim(),
+                        erpMax:  f[9].trim(),
+                        beam:    f[10].trim(),
+                        dist:    f[11].trim(),
+                        azimuth: f[12].trim(),
+                        db:      f[13].trim(),
+                        ps:      f[14].trim(),
+                        pi:      f[15].trim(),
+                        pol:     f[16].trim(),
+                        id:      id,
+                    };
+                    
+                    _userlistDb[id] = entry;
+
+                    if (!isNaN(lat) && !isNaN(lon)) {
+                        const geoKey = `${parseInt(khz, 10)}_${lat.toFixed(1)}_${lon.toFixed(1)}`;
+                        if (!_userlistGeoIndex[geoKey]) _userlistGeoIndex[geoKey] = [];
+                        _userlistGeoIndex[geoKey].push(entry);
+                    }
                 }
             }
-        }
-        
-        _userlistLoaded = true;
-        debugLog(`userlist1.csv loaded via stream: ${Object.keys(_userlistDb).length} entries.`);
-    } catch (e) {
-        debugLog('Failed to stream userlist1.csv: ' + e.message);
-    }
-}
-
-// ── Look up a TX station's userlist entry by matching all siblings' ids ────
-const _userlistEntryCache = new Map();
-
-function getUserlistEntry(tx) {
-    if (!tx) return null;
-
-    const cacheKey = (tx.id ? String(tx.id) : '') + '|' + tx.freq + '|' + tx.lat + '|' + tx.lon;
-
-    if (_userlistEntryCache.has(cacheKey)) {
-        return _userlistEntryCache.get(cacheKey);
-    }
-
-    let entry = null;
-
-    if (tx.id && _userlistDb[String(tx.id)]) {
-        entry = _userlistDb[String(tx.id)];
-    } else {
-        const freqKhz = Math.round(tx.freq * 1000);
-        entry = Object.values(_userlistDb).find(e =>
-            parseInt(e.khz, 10) === freqKhz &&
-            Math.abs(parseFloat(e.lat) - parseFloat(tx.lat)) < 0.01 &&
-            Math.abs(parseFloat(e.lon) - parseFloat(tx.lon)) < 0.01
-        ) || null;
-    }
-
-    _userlistEntryCache.set(cacheKey, entry);
-    return entry;
-}
-// ── Merge userlist beam data into txStations after loading ────────────────
-// Called once after both txStations and _userlistDb are populated.
-// Adds a `beam` property to each tx object so getTxBeamScore() can use it.
-async function enrichTxBeamData(stations) {
-    if (!_userlistLoaded || Object.keys(_userlistDb).length === 0) return;
-    let enriched = 0;
-    let lastYield = performance.now();
-
-    for (let i = 0; i < stations.length; i++) {
-        if (performance.now() - lastYield > 10) {
-            await new Promise(r => setTimeout(r, 2));
-            lastYield = performance.now();
-        }
-
-        const tx = stations[i];
-        if (tx.beam) continue;
-        const entry = getUserlistEntry(tx);
-        if (entry && entry.beam) {
-            tx.beam = entry.beam;
-            enriched++;
+            
+            _userlistLoaded = true;
+            debugLog(`userlist1.csv loaded via stream: ${Object.keys(_userlistDb).length} entries.`);
+        } catch (e) {
+            debugLog('Failed to stream userlist1.csv: ' + e.message);
         }
     }
-    if (enriched > 0) debugLog(`enrichTxBeamData: added beam data to ${enriched} TX stations.`);
-}
 
-// ── Beam score: returns 0.0 for clearly off-beam TX stations ──────────────
-// For range beams (e.g. "270-40"): hard reject beyond 15° outside the arc.
-// For single-value beams (e.g. "200"): ±30° half-beamwidth, hard reject at 45° outside.
-function getTxBeamScore(tx, targetLat, targetLon) {
-    let beamStr = (tx.beam || '').trim();
-    if (!beamStr) {
-        const sibs = txSiblings(tx);
-        for (const sib of sibs) {
-            const sibBeam = (sib.beam || '').trim();
-            if (sibBeam) { beamStr = sibBeam; break; }
+    const _userlistEntryCache = new Map();
+
+    function getUserlistEntry(tx) {
+        if (!tx) return null;
+
+        const cacheKey = (tx.id ? String(tx.id) : '') + '|' + tx.freq + '|' + tx.lat + '|' + tx.lon;
+
+        if (_userlistEntryCache.has(cacheKey)) {
+            return _userlistEntryCache.get(cacheKey);
         }
+
+        let entry = null;
+
+        if (tx.id && _userlistDb[String(tx.id)]) {
+            entry = _userlistDb[String(tx.id)];
+        } else {
+            const freqKhz = Math.round(tx.freq * 1000);
+            entry = Object.values(_userlistDb).find(e =>
+                parseInt(e.khz, 10) === freqKhz &&
+                Math.abs(parseFloat(e.lat) - parseFloat(tx.lat)) < 0.01 &&
+                Math.abs(parseFloat(e.lon) - parseFloat(tx.lon)) < 0.01
+            ) || null;
+        }
+
+        _userlistEntryCache.set(cacheKey, entry);
+        return entry;
     }
-    if (!beamStr) return 1.0;
 
-    const brg = bearingDeg(parseFloat(tx.lat), parseFloat(tx.lon), targetLat, targetLon);
+    async function enrichTxBeamData(stations) {
+        if (!_userlistLoaded || Object.keys(_userlistDb).length === 0) return;
+        let enriched = 0;
+        let lastYield = performance.now();
 
-    // Alle Bereiche wie "60-220" extrahieren
-    const ranges = [...beamStr.matchAll(/(\d+)\s*-\s*(\d+)/g)];
-
-    if (ranges.length > 0) {
-        let minOutsideDeg = 180;
-        let inAnyRange = false;
-
-        for (const match of ranges) {
-            const s = parseInt(match[1], 10);
-            const e = parseInt(match[2], 10);
-            const inRange = s <= e
-                ? (brg >= s && brg <= e)
-                : (brg >= s || brg <= e);
-
-            if (inRange) {
-                inAnyRange = true;
-                break;
+        for (let i = 0; i < stations.length; i++) {
+            if (performance.now() - lastYield > 10) {
+                await new Promise(r => setTimeout(r, 2));
+                lastYield = performance.now();
             }
 
-            const dS = Math.abs(normalizeAngle180(brg - s));
-            const dE = Math.abs(normalizeAngle180(brg - e));
-            minOutsideDeg = Math.min(minOutsideDeg, dS, dE);
+            const tx = stations[i];
+            if (tx.beam) continue;
+            const entry = getUserlistEntry(tx);
+            if (entry && entry.beam) {
+                tx.beam = entry.beam;
+                enriched++;
+            }
         }
-
-        if (inAnyRange) return 1.0;
-        if (minOutsideDeg >= 3) return 0.0;
-        return 1.0 - (minOutsideDeg / 3);
-
-    } else {
-        // Fallback: Einzelne Werte ohne Bindestrich (z.B. "200" oder "90 180")
-        const beams = beamStr.match(/\d+/g);
-        if (!beams || beams.length === 0) return 1.0;
-
-        let minDist = 180;
-        beams.forEach(b => {
-            const d = Math.abs(normalizeAngle180(brg - parseInt(b, 10)));
-            if (d < minDist) minDist = d;
-        });
-
-        const outsideDeg = Math.max(0, minDist - 30);
-        if (outsideDeg >= 10) return 0.0;
-        return 1.0 - (outsideDeg / 10);
+        if (enriched > 0) debugLog(`enrichTxBeamData: added beam data to ${enriched} TX stations.`);
     }
-}
+
+    function getTxBeamScore(tx, targetLat, targetLon) {
+        let beamStr = (tx.beam || '').trim();
+        if (!beamStr) {
+            const sibs = txSiblings(tx);
+            for (const sib of sibs) {
+                const sibBeam = (sib.beam || '').trim();
+                if (sibBeam) { beamStr = sibBeam; break; }
+            }
+        }
+        if (!beamStr) return 1.0;
+
+        const brg = bearingDeg(parseFloat(tx.lat), parseFloat(tx.lon), targetLat, targetLon);
+
+        const ranges = [...beamStr.matchAll(/(\d+)\s*-\s*(\d+)/g)];
+
+        if (ranges.length > 0) {
+            let minOutsideDeg = 180;
+            let inAnyRange = false;
+
+            for (const match of ranges) {
+                const s = parseInt(match[1], 10);
+                const e = parseInt(match[2], 10);
+                const inRange = s <= e
+                    ? (brg >= s && brg <= e)
+                    : (brg >= s || brg <= e);
+
+                if (inRange) {
+                    inAnyRange = true;
+                    break;
+                }
+
+                const dS = Math.abs(normalizeAngle180(brg - s));
+                const dE = Math.abs(normalizeAngle180(brg - e));
+                minOutsideDeg = Math.min(minOutsideDeg, dS, dE);
+            }
+
+            if (inAnyRange) return 1.0;
+            if (minOutsideDeg >= 3) return 0.0;
+            return 1.0 - (minOutsideDeg / 3);
+
+        } else {
+            const beams = beamStr.match(/\d+/g);
+            if (!beams || beams.length === 0) return 1.0;
+
+            let minDist = 180;
+            beams.forEach(b => {
+                const d = Math.abs(normalizeAngle180(brg - parseInt(b, 10)));
+                if (d < minDist) minDist = d;
+            });
+
+            const outsideDeg = Math.max(0, minDist - 30);
+            if (outsideDeg >= 10) return 0.0;
+            return 1.0 - (outsideDeg / 10);
+        }
+    }
 
     function reflectionGeometryScore(txLat, txLon, acLat, acLon, rxLat, rxLon) {
         const vTx = toVec(txLat, txLon), vRx = toVec(rxLat, rxLon), vAc = toVec(acLat, acLon);
@@ -1041,140 +1064,126 @@ function getTxBeamScore(tx, targetLat, targetLon) {
         return 0.3 + 0.7 * Math.max(0, Math.cos(toRad(trackDiff)));
     }
 
-function _evalScatterAt(acLat, acLon, acAltFt, acTrackDeg, acCategory, rxLat, rxLon, rxElevM, tx) {
-    const txLat  = parseFloat(tx.lat);
-    const txLon  = parseFloat(tx.lon);
-    const altM   = acAltFt * 0.3048;
+    function _evalScatterAt(acLat, acLon, acAltFt, acTrackDeg, acCategory, rxLat, rxLon, rxElevM, tx) {
+        const txLat  = parseFloat(tx.lat);
+        const txLon  = parseFloat(tx.lon);
+        const altM   = acAltFt * 0.3048;
 
-    const d_tx   = haversineKm(acLat, acLon, txLat, txLon);
-    const d_rx   = haversineKm(acLat, acLon, rxLat, rxLon);
-    const d_txrx = haversineKm(txLat, txLon, rxLat, rxLon);
+        const d_tx   = haversineKm(acLat, acLon, txLat, txLon);
+        const d_rx   = haversineKm(acLat, acLon, rxLat, rxLon);
+        const d_txrx = haversineKm(txLat, txLon, rxLat, rxLon);
 
-    // ── Hard filters ──────────────────────────────────────────────────────
-    if (d_tx < 5 || d_rx < 5 || d_txrx < S.minTxRxDistKm) return null;
+        if (d_tx < 5 || d_rx < 5 || d_txrx < S.minTxRxDistKm) return null;
 
-    const dynamicEllipseFactor = 1.02 + Math.min(1.0, altM / 12000) * 0.06;
-    if (d_tx + d_rx > dynamicEllipseFactor * d_txrx) return null;
+        const dynamicEllipseFactor = 1.02 + Math.min(1.0, altM / 12000) * 0.06;
+        if (d_tx + d_rx > dynamicEllipseFactor * d_txrx) return null;
 
-    // ── Beam hard gate (aircraft position) ───────────────────────────────
-    // The TX antenna must illuminate the aircraft (scatter point).
-    const beamMultAc = getTxBeamScore(tx, acLat, acLon);
-    if (beamMultAc === 0.0) return null;
+        const beamMultAc = getTxBeamScore(tx, acLat, acLon);
+        if (beamMultAc === 0.0) return null;
 
-    // ── Beam hard gate (RX direction) ─────────────────────────────────────
-    // For scatter to reach the RX, the TX beam must also cover the direction
-    // toward the RX. If the RX is outside the beam arc, scatter cannot
-    // propagate from the aircraft toward the RX — hard reject.
-    const beamMultRx = getTxBeamScore(tx, rxLat, rxLon);
-    if (beamMultRx === 0.0) return null;
+        const beamMultRx = getTxBeamScore(tx, rxLat, rxLon);
+        if (beamMultRx === 0.0) return null;
 
-    // Combined beam multiplier: both directions must be within beam
-    const beamMult = beamMultAc * beamMultRx;
+        const beamMult = beamMultAc * beamMultRx;
 
-    // ── alongTrack measured from RX (matches envelope index direction) ────
-    const { crossTrackKm, alongTrackKm: alongFromRx } =
-        crossAlongTrack(rxLat, rxLon, txLat, txLon, acLat, acLon);
+        const { crossTrackKm, alongTrackKm: alongFromRx } =
+            crossAlongTrack(rxLat, rxLon, txLat, txLon, acLat, acLon);
 
-    if (alongFromRx > d_txrx * 1.1 || alongFromRx < 0) return null;
+        if (alongFromRx > d_txrx * 1.1 || alongFromRx < 0) return null;
 
-    // ── Reuse cached terrain envelope ────────────────────────────────────
-    const env    = getTxEnvelope(tx, rxLat, rxLon, rxElevM);
-    const stepKm = env.stepKm;
-    const NUM    = env.hrx_env.length;
+        const env    = getTxEnvelope(tx, rxLat, rxLon, rxElevM);
+        const stepKm = env.stepKm;
+        const NUM    = env.hrx_env.length;
 
-    const rawIdx  = alongFromRx / stepKm;
-    const idxLo   = Math.max(0, Math.min(NUM - 2, Math.floor(rawIdx)));
-    const idxHi   = idxLo + 1;
-    const frac    = rawIdx - idxLo;
-    const hrxAtAc = env.hrx_env[idxLo] * (1 - frac) + env.hrx_env[idxHi] * frac;
-    const htxAtAc = env.htx_env[idxLo] * (1 - frac) + env.htx_env[idxHi] * frac;
+        const rawIdx  = alongFromRx / stepKm;
+        const idxLo   = Math.max(0, Math.min(NUM - 2, Math.floor(rawIdx)));
+        const idxHi   = idxLo + 1;
+        const frac    = rawIdx - idxLo;
+        const hrxAtAc = env.hrx_env[idxLo] * (1 - frac) + env.hrx_env[idxHi] * frac;
+        const htxAtAc = env.htx_env[idxLo] * (1 - frac) + env.htx_env[idxHi] * frac;
 
-    if (altM < hrxAtAc || altM < htxAtAc) return null;
+        if (altM < hrxAtAc || altM < htxAtAc) return null;
 
-    // ── Elevation angles with earth-curvature correction ──────────────────
-    const c_factor = 16.974;
-    const bulgeTx  = (d_tx * d_tx) / c_factor;
-    const bulgeRx  = (d_rx * d_rx) / c_factor;
+        const c_factor = 16.974;
+        const bulgeTx  = (d_tx * d_tx) / c_factor;
+        const bulgeRx  = (d_rx * d_rx) / c_factor;
 
-    const elevAngleTxDeg = toDeg(Math.atan2((altM - bulgeTx) - env.txEffM, d_tx * 1000));
-    const elevAngleRxDeg = toDeg(Math.atan2((altM - bulgeRx) - rxElevM,    d_rx * 1000));
+        const elevAngleTxDeg = toDeg(Math.atan2((altM - bulgeTx) - env.txEffM, d_tx * 1000));
+        const elevAngleRxDeg = toDeg(Math.atan2((altM - bulgeRx) - rxElevM,    d_rx * 1000));
 
-    if (elevAngleTxDeg > 9 || elevAngleRxDeg > 9) return null;
+        if (elevAngleTxDeg > 9 || elevAngleRxDeg > 9) return null;
 
-    // ── Sweet-spot score ──────────────────────────────────────────────────
-    const txSigma = 1.2, rxSigma = 3.0;
-    const txElevScore  = Math.exp(-(elevAngleTxDeg * elevAngleTxDeg) / (2 * txSigma * txSigma));
-    const rxElevScore  = Math.exp(-(elevAngleRxDeg * elevAngleRxDeg) / (2 * rxSigma * rxSigma));
-    const sweetSpotScore = txElevScore * rxElevScore;
+        const txSigma = 1.2, rxSigma = 3.0;
+        const txElevScore  = Math.exp(-(elevAngleTxDeg * elevAngleTxDeg) / (2 * txSigma * txSigma));
+        const rxElevScore  = Math.exp(-(elevAngleRxDeg * elevAngleRxDeg) / (2 * rxSigma * rxSigma));
+        const sweetSpotScore = txElevScore * rxElevScore;
 
-    const marginTxM   = altM - htxAtAc;
-    const marginRxM   = altM - hrxAtAc;
-    const marginScore = Math.min(1.0, Math.exp(-Math.max(marginTxM, marginRxM) / 4000));
+        const marginTxM   = altM - htxAtAc;
+        const marginRxM   = altM - hrxAtAc;
+        const marginScore = Math.min(1.0, Math.exp(-Math.max(marginTxM, marginRxM) / 4000));
 
-    // ── Remaining geometry scores ─────────────────────────────────────────
-    const { reflScore } = reflectionGeometryScore(txLat, txLon, acLat, acLon, rxLat, rxLon);
-    const fuseScore    = fuselageAlignmentScore(acTrackDeg, txLat, txLon, acLat, acLon, rxLat, rxLon);
-    const freqFactor   = 1.0 - 0.03 * ((tx.freq - 98) / 20.5);
-    const erpScoreVal  = Math.min(1.0, Math.log10(tx.erp / 10 + 1) / Math.log10(101));
-    const distScore    = Math.exp(-crossTrackKm / 25);
-    const sizeMult     = acSizeMult(acCategory);
+        const { reflScore } = reflectionGeometryScore(txLat, txLon, acLat, acLon, rxLat, rxLon);
+        const fuseScore    = fuselageAlignmentScore(acTrackDeg, txLat, txLon, acLat, acLon, rxLat, rxLon);
+        const freqFactor   = 1.0 - 0.03 * ((tx.freq - 98) / 20.5);
+        const erpScoreVal  = Math.min(1.0, Math.log10(tx.erp / 10 + 1) / Math.log10(101));
+        const distScore    = Math.exp(-crossTrackKm / 25);
+        const sizeMult     = acSizeMult(acCategory);
 
-    let baseScore = sweetSpotScore * 40
-                  + marginScore    * 20
-                  + distScore      * 20
-                  + reflScore      * 10
-                  + fuseScore      *  5
-                  + erpScoreVal    *  3
-                  + (freqFactor - 0.97) / 0.06 * 2;
+        let baseScore = sweetSpotScore * 40
+                      + marginScore    * 20
+                      + distScore      * 20
+                      + reflScore      * 10
+                      + fuseScore      *  5
+                      + erpScoreVal    *  3
+                      + (freqFactor - 0.97) / 0.06 * 2;
 
-    // beamMult: product of aircraft-side and RX-side beam scores
-    const finalScore = baseScore * sizeMult * beamMult;
+        const finalScore = baseScore * sizeMult * beamMult;
 
-    return {
-        score:        Math.max(0, Math.min(100, Math.round(finalScore))),
-        crossTrackKm
-    };
-}
-
-function calcScatter(ac, rxLat, rxLon, rxElevM, tx) {
-    if (!ac.lat || !ac.lon || isNaN(ac.lat) || isNaN(ac.lon)) return null;
-    if ((ac.speed || 0) < 50 || (ac.alt_ft || 0) < 1000)     return null;
-    if (!meetsAcTypeFilter(ac))                                return null;
-
-    const txLat = parseFloat(tx.lat), txLon = parseFloat(tx.lon);
-    const crossPt = (ac.track !== null)
-        ? gcIntersectionPoint(txLat, txLon, rxLat, rxLon, ac.lat, ac.lon, ac.track)
-        : midpointGreatCircle(txLat, txLon, rxLat, rxLon);
-
-    const speedKmS = ((ac.speed || 0) * 1.852) / 3600;
-    if (speedKmS <= 0) return null;
-
-    const distToCross = haversineKm(ac.lat, ac.lon, crossPt.lat, crossPt.lon);
-    let etaSec = distToCross / speedKmS;
-    if (ac.track !== null) {
-        const brgToCross = bearingDeg(ac.lat, ac.lon, crossPt.lat, crossPt.lon);
-        if (Math.abs(normalizeAngle180(ac.track - brgToCross)) > 90) etaSec = -etaSec;
+        return {
+            score:        Math.max(0, Math.min(100, Math.round(finalScore))),
+            crossTrackKm
+        };
     }
 
-    let bestScore = 0;
-    for (const dtSec of FORECAST_STEPS_SEC) {
-        let fLat = ac.lat, fLon = ac.lon;
-        let fAltFt = ac.alt_ft + ((ac.vspeed || 0) / 60) * dtSec;
-        if (ac.track !== null && ac.speed > 0) {
-            const p = deadReckon(ac.lat, ac.lon, ac.track, ac.speed, dtSec);
-            fLat = p.lat; fLon = p.lon;
-        }
-        if (fAltFt < 1000) continue;
+    function calcScatter(ac, rxLat, rxLon, rxElevM, tx) {
+        if (!ac.lat || !ac.lon || isNaN(ac.lat) || isNaN(ac.lon)) return null;
+        if ((ac.speed || 0) < 50 || (ac.alt_ft || 0) < 1000)     return null;
+        if (!meetsAcTypeFilter(ac))                                return null;
 
-        const r = _evalScatterAt(fLat, fLon, fAltFt, ac.track, ac.category, rxLat, rxLon, rxElevM, tx);
-        if (r && r.score > bestScore) {
-            bestScore = r.score;
-            if (bestScore >= 95) break; // Early-exit: near-perfect score, no need to continue
+        const txLat = parseFloat(tx.lat), txLon = parseFloat(tx.lon);
+        const crossPt = (ac.track !== null)
+            ? gcIntersectionPoint(txLat, txLon, rxLat, rxLon, ac.lat, ac.lon, ac.track)
+            : midpointGreatCircle(txLat, txLon, rxLat, rxLon);
+
+        const speedKmS = ((ac.speed || 0) * 1.852) / 3600;
+        if (speedKmS <= 0) return null;
+
+        const distToCross = haversineKm(ac.lat, ac.lon, crossPt.lat, crossPt.lon);
+        let etaSec = distToCross / speedKmS;
+        if (ac.track !== null) {
+            const brgToCross = bearingDeg(ac.lat, ac.lon, crossPt.lat, crossPt.lon);
+            if (Math.abs(normalizeAngle180(ac.track - brgToCross)) > 90) etaSec = -etaSec;
         }
+
+        let bestScore = 0;
+        for (const dtSec of FORECAST_STEPS_SEC) {
+            let fLat = ac.lat, fLon = ac.lon;
+            let fAltFt = ac.alt_ft + ((ac.vspeed || 0) / 60) * dtSec;
+            if (ac.track !== null && ac.speed > 0) {
+                const p = deadReckon(ac.lat, ac.lon, ac.track, ac.speed, dtSec);
+                fLat = p.lat; fLon = p.lon;
+            }
+            if (fAltFt < 1000) continue;
+
+            const r = _evalScatterAt(fLat, fLon, fAltFt, ac.track, ac.category, rxLat, rxLon, rxElevM, tx);
+            if (r && r.score > bestScore) {
+                bestScore = r.score;
+                if (bestScore >= 95) break; 
+            }
+        }
+
+        return { score: bestScore, etaSec, crossPt };
     }
-
-    return { score: bestScore, etaSec, crossPt };
-}
 
     // ── Persistent Candidates Processing ──────────────────────────────────
     async function computePersistentCrossings(robustAircraftList, rxLat, rxLon) {
@@ -1187,7 +1196,6 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx) {
 
         let lastYield = performance.now();
         for (let i = 0; i < robustAircraftList.length; i++) {
-            // Optimization: Yield to the event loop more aggressively on weak CPUs
             if (performance.now() - lastYield > 5) {
                 await new Promise(r => setTimeout(r, 2));
                 lastYield = performance.now();
@@ -1253,85 +1261,83 @@ function calcScatter(ac, rxLat, rxLon, rxElevM, tx) {
         const az = lastRotorAzimuth;
         let dirs = [];
 
-if (az >= 348.75 || az < 11.25) dirs = ['N'];
-else if (az >= 11.25 && az < 33.75) dirs = ['N', 'NE'];
-else if (az >= 33.75 && az < 56.25) dirs = ['NE'];
-else if (az >= 56.25 && az < 78.75) dirs = ['NE', 'E'];
-else if (az >= 78.75 && az < 101.25) dirs = ['E'];
-else if (az >= 101.25 && az < 123.75) dirs = ['E', 'SE'];
-else if (az >= 123.75 && az < 146.25) dirs = ['SE'];
-else if (az >= 146.25 && az < 168.75) dirs = ['SE', 'S'];
-else if (az >= 168.75 && az < 191.25) dirs = ['S'];
-else if (az >= 191.25 && az < 213.75) dirs = ['S', 'SW'];
-else if (az >= 213.75 && az < 236.25) dirs = ['SW'];
-else if (az >= 236.25 && az < 258.75) dirs = ['SW', 'W'];
-else if (az >= 258.75 && az < 281.25) dirs = ['W'];
-else if (az >= 281.25 && az < 303.75) dirs = ['W', 'NW'];
-else if (az >= 303.75 && az < 326.25) dirs = ['NW'];
-else if (az >= 326.25 && az < 348.75) dirs = ['NW', 'N'];
+        if (az >= 348.75 || az < 11.25) dirs = ['N'];
+        else if (az >= 11.25 && az < 33.75) dirs = ['N', 'NE'];
+        else if (az >= 33.75 && az < 56.25) dirs = ['NE'];
+        else if (az >= 56.25 && az < 78.75) dirs = ['NE', 'E'];
+        else if (az >= 78.75 && az < 101.25) dirs = ['E'];
+        else if (az >= 101.25 && az < 123.75) dirs = ['E', 'SE'];
+        else if (az >= 123.75 && az < 146.25) dirs = ['SE'];
+        else if (az >= 146.25 && az < 168.75) dirs = ['SE', 'S'];
+        else if (az >= 168.75 && az < 191.25) dirs = ['S'];
+        else if (az >= 191.25 && az < 213.75) dirs = ['S', 'SW'];
+        else if (az >= 213.75 && az < 236.25) dirs = ['SW'];
+        else if (az >= 236.25 && az < 258.75) dirs = ['SW', 'W'];
+        else if (az >= 258.75 && az < 281.25) dirs = ['W'];
+        else if (az >= 281.25 && az < 303.75) dirs = ['W', 'NW'];
+        else if (az >= 303.75 && az < 326.25) dirs = ['NW'];
+        else if (az >= 326.25 && az < 348.75) dirs = ['NW', 'N'];
 
         _activeCompass = dirs;
         updateCompassUI();
     }
 
-function getActiveVisibleCrossings() {
-    const rx = getRxCoords(); if (!rx) return [];
-    const out = [];
-    const now = Date.now();
+    function getActiveVisibleCrossings() {
+        const rx = getRxCoords(); if (!rx) return [];
+        const out = [];
+        const now = Date.now();
 
-    // Compass direction → [startDeg, endDeg] (all non-wrapping except N)
-    const dirs = {
-        N:  null,           // special wrap-around case handled separately
-        NE: [22.5,  67.5],
-        E:  [67.5,  112.5],
-        SE: [112.5, 157.5],
-        S:  [157.5, 202.5],
-        SW: [202.5, 247.5],
-        W:  [247.5, 292.5],
-        NW: [292.5, 337.5]
-    };
+        const dirs = {
+            N:  null,           
+            NE: [22.5,  67.5],
+            E:  [67.5,  112.5],
+            SE: [112.5, 157.5],
+            S:  [157.5, 202.5],
+            SW: [202.5, 247.5],
+            W:  [247.5, 292.5],
+            NW: [292.5, 337.5]
+        };
 
-    for (let icao in _persistentCrossings) {
-        for (let tK in _persistentCrossings[icao]) {
-            const cr = _persistentCrossings[icao][tK];
-            const elapsed = (now - cr.calcTime) / 1000;
-            const liveEta = cr.etaSec - elapsed;
+        for (let icao in _persistentCrossings) {
+            for (let tK in _persistentCrossings[icao]) {
+                const cr = _persistentCrossings[icao][tK];
+                const elapsed = (now - cr.calcTime) / 1000;
+                const liveEta = cr.etaSec - elapsed;
 
-            if (liveEta <= S.leadTimeSec && liveEta >= -S.trailTimeSec) {
+                if (liveEta <= S.leadTimeSec && liveEta >= -S.trailTimeSec) {
 
-                if (_activeTxKey) {
-                    if (tK !== _activeTxKey) continue;
-                    out.push({...cr, liveEta, elapsed});
-                    continue;
-                }
-
-                if (_activeCompass && _activeCompass.length > 0) {
-                    const brg = bearingDeg(rx.lat, rx.lon, cr.tx.lat, cr.tx.lon);
-
-                    let isMatch = false;
-                    for (let dir of _activeCompass) {
-                        if (dir === 'N') {
-                            // N wraps around 0°: 337.5°–360° OR 0°–22.5°
-                            if (brg >= 337.5 || brg < 22.5) { isMatch = true; break; }
-                        } else {
-                            const d = dirs[dir];
-                            if (d && brg >= d[0] && brg < d[1]) { isMatch = true; break; }
-                        }
+                    if (_activeTxKey) {
+                        if (tK !== _activeTxKey) continue;
+                        out.push({...cr, liveEta, elapsed});
+                        continue;
                     }
-                    if (!isMatch) continue;
-                }
 
-                if (_activeFreq !== null) {
-                    const match = txSiblings(cr.tx).some(t => Math.round(t.freq * 100) === Math.round(_activeFreq * 100));
-                    if (!match) continue;
-                }
+                    if (_activeCompass && _activeCompass.length > 0) {
+                        const brg = bearingDeg(rx.lat, rx.lon, cr.tx.lat, cr.tx.lon);
 
-                out.push({...cr, liveEta, elapsed});
+                        let isMatch = false;
+                        for (let dir of _activeCompass) {
+                            if (dir === 'N') {
+                                if (brg >= 337.5 || brg < 22.5) { isMatch = true; break; }
+                            } else {
+                                const d = dirs[dir];
+                                if (d && brg >= d[0] && brg < d[1]) { isMatch = true; break; }
+                            }
+                        }
+                        if (!isMatch) continue;
+                    }
+
+                    if (_activeFreq !== null) {
+                        const match = txSiblings(cr.tx).some(t => Math.round(t.freq * 100) === Math.round(_activeFreq * 100));
+                        if (!match) continue;
+                    }
+
+                    out.push({...cr, liveEta, elapsed});
+                }
             }
         }
+        return out;
     }
-    return out;
-}
 
     function getPrimaryCrossings(allCrossings) {
         const groups = {};
@@ -1372,7 +1378,6 @@ function getActiveVisibleCrossings() {
         if(g('as-stat-ac'))   g('as-stat-ac').textContent  =`✈ ${acCnt} aircraft`;
         if(g('as-stat-cand')) g('as-stat-cand').textContent=`📡 ${candCnt} active`;
         
-        // Show TX DB count and fmscan userlist loaded entries count
         const fmscanCount = Object.keys(_userlistDb || {}).length;
         if(g('as-stat-db'))   g('as-stat-db').textContent  =`FMLIST: ${txCnt} TX | FMSCAN: ${fmscanCount} TX`;
         
@@ -1429,7 +1434,7 @@ function getActiveVisibleCrossings() {
         } else {
             rxMarker.setTooltipContent(rxTtHtml);
         }
-		
+        
         rxMarker.setLatLng([rx.lat, rx.lon]);
     }
 
@@ -1476,145 +1481,120 @@ function getActiveVisibleCrossings() {
         }
     }
 
-function initProfileCanvasEvents() {
-    const canvas = document.getElementById('as-profile-canvas');
-    if (!canvas) return;
+    function initProfileCanvasEvents() {
+        const canvas = document.getElementById('as-profile-canvas');
+        if (!canvas) return;
 
-    // ── rAF-based throttle so drawProfile runs at most once per frame ────
-    let _rafPending = false;
-    function scheduleRedraw() {
-        if (_rafPending) return;          // already queued – skip
-        _rafPending = true;
-        requestAnimationFrame(() => {
-            _rafPending = false;
-            if (!_activeProfileTxKey || !_activeProfileTxObj) return;
-            const rx = getRxCoords(); if (!rx) return;
-            const allVisible  = getActiveVisibleCrossings();
-            const matchingCrs = allVisible.filter(c =>
-                (c.tx.lat + '_' + c.tx.lon + '_' + c.tx.freq) === _activeProfileTxKey
-            );
-            // keep the hash in sync so the countdown-tick does not re-draw
-            _lastProfileHash = matchingCrs.map(c =>
-                c.ac.icao24 + ':' + Math.round(c.liveEta / 5)
-            ).join('|');
-            drawProfile(matchingCrs, _currentPathElevs, rx, _activeProfileTxObj);
+        let _rafPending = false;
+        function scheduleRedraw() {
+            if (_rafPending) return;          
+            _rafPending = true;
+            requestAnimationFrame(() => {
+                _rafPending = false;
+                if (!_activeProfileTxKey || !_activeProfileTxObj) return;
+                const rx = getRxCoords(); if (!rx) return;
+                const allVisible  = getActiveVisibleCrossings();
+                const matchingCrs = allVisible.filter(c =>
+                    (c.tx.lat + '_' + c.tx.lon + '_' + c.tx.freq) === _activeProfileTxKey
+                );
+                _lastProfileHash = matchingCrs.map(c =>
+                    c.ac.icao24 + ':' + Math.round(c.liveEta / 5)
+                ).join('|');
+                drawProfile(matchingCrs, _currentPathElevs, rx, _activeProfileTxObj);
+            });
+        }
+
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            if (!_activeProfileTxKey) return;
+
+            const rect    = canvas.getBoundingClientRect();
+            const mouseX  = e.clientX - rect.left;
+            const padL = 45, padR = 25, drawW = canvas.width - padL - padR;
+            if (mouseX < padL || mouseX > canvas.width - padR) return;
+
+            const range      = profMaxX - profMinX;
+            const mouseKm    = profMinX + ((mouseX - padL) / drawW) * range;
+            const zoomFactor = e.deltaY > 0 ? 1.15 : 0.85;
+            let newRange     = Math.min(Math.max(range * zoomFactor, 5), _currentProfileDist);
+
+            let newMin = mouseKm - ((mouseX - padL) / drawW) * newRange;
+            let newMax = newMin + newRange;
+
+            if (newMin < 0)                       { newMax -= newMin; newMin = 0; }
+            if (newMax > _currentProfileDist)     { newMin -= (newMax - _currentProfileDist); newMax = _currentProfileDist; }
+            if (newMin < 0)                       newMin = 0;
+            if (newMax > _currentProfileDist)     newMax = _currentProfileDist;
+
+            profMinX = newMin;
+            profMaxX = newMax;
+            scheduleRedraw();
+        }, { passive: false });   
+
+        canvas.addEventListener('mousedown', (e) => {
+            if (_activeProfileTxKey) { isDraggingProf = true; lastMouseX = e.clientX; }
         });
-    }
+        window.addEventListener('mouseup',  () => { isDraggingProf = false; });
+        window.addEventListener('mousemove', (e) => {
+            if (!isDraggingProf || !_activeProfileTxKey) return;
 
-    // ── Wheel zoom ────────────────────────────────────────────────────────
-    canvas.addEventListener('wheel', (e) => {
-        e.preventDefault();
-        if (!_activeProfileTxKey) return;
+            const dx      = e.clientX - lastMouseX;
+            lastMouseX    = e.clientX;
+            const drawW   = canvas.width - 45 - 25;
+            const range   = profMaxX - profMinX;
+            const shiftKm = -(dx / drawW) * range;
 
-        const rect    = canvas.getBoundingClientRect();
-        const mouseX  = e.clientX - rect.left;
-        const padL = 45, padR = 25, drawW = canvas.width - padL - padR;
-        if (mouseX < padL || mouseX > canvas.width - padR) return;
+            let newMin = profMinX + shiftKm;
+            let newMax = profMaxX + shiftKm;
 
-        const range      = profMaxX - profMinX;
-        const mouseKm    = profMinX + ((mouseX - padL) / drawW) * range;
-        const zoomFactor = e.deltaY > 0 ? 1.15 : 0.85;
-        let newRange     = Math.min(Math.max(range * zoomFactor, 5), _currentProfileDist);
+            if (newMin < 0)                        { newMin = 0; newMax = range; }
+            else if (newMax > _currentProfileDist) { newMax = _currentProfileDist; newMin = _currentProfileDist - range; }
 
-        let newMin = mouseKm - ((mouseX - padL) / drawW) * newRange;
-        let newMax = newMin + newRange;
-
-        if (newMin < 0)                       { newMax -= newMin; newMin = 0; }
-        if (newMax > _currentProfileDist)     { newMin -= (newMax - _currentProfileDist); newMax = _currentProfileDist; }
-        if (newMin < 0)                       newMin = 0;
-        if (newMax > _currentProfileDist)     newMax = _currentProfileDist;
-
-        profMinX = newMin;
-        profMaxX = newMax;
-        scheduleRedraw();
-    }, { passive: false });   // ← MUST be false so e.preventDefault() works
-
-    // ── Drag pan ──────────────────────────────────────────────────────────
-    canvas.addEventListener('mousedown', (e) => {
-        if (_activeProfileTxKey) { isDraggingProf = true; lastMouseX = e.clientX; }
-    });
-    window.addEventListener('mouseup',  () => { isDraggingProf = false; });
-    window.addEventListener('mousemove', (e) => {
-        if (!isDraggingProf || !_activeProfileTxKey) return;
-
-        const dx      = e.clientX - lastMouseX;
-        lastMouseX    = e.clientX;
-        const drawW   = canvas.width - 45 - 25;
-        const range   = profMaxX - profMinX;
-        const shiftKm = -(dx / drawW) * range;
-
-        let newMin = profMinX + shiftKm;
-        let newMax = profMaxX + shiftKm;
-
-        if (newMin < 0)                        { newMin = 0; newMax = range; }
-        else if (newMax > _currentProfileDist) { newMax = _currentProfileDist; newMin = _currentProfileDist - range; }
-
-        profMinX = newMin;
-        profMaxX = newMax;
-        scheduleRedraw();
-    });
-
-    // ── Y-scale slider ────────────────────────────────────────────────────
-    const yZoom = document.getElementById('as-profile-y-zoom');
-    if (yZoom) {
-        yZoom.addEventListener('input', (e) => {
-            profScaleY = parseFloat(e.target.value);
+            profMinX = newMin;
+            profMaxX = newMax;
             scheduleRedraw();
         });
-        yZoom.addEventListener('dblclick', () => {
-            profScaleY = 1.0;
-            yZoom.value = 1.0;
-            scheduleRedraw();
-        });
+
+        const yZoom = document.getElementById('as-profile-y-zoom');
+        if (yZoom) {
+            yZoom.addEventListener('input', (e) => {
+                profScaleY = parseFloat(e.target.value);
+                scheduleRedraw();
+            });
+            yZoom.addEventListener('dblclick', () => {
+                profScaleY = 1.0;
+                yZoom.value = 1.0;
+                scheduleRedraw();
+            });
+        }
     }
-}
 
-let _lastProfileHash = '';
+    let _lastProfileHash = '';
 
-// Throttled redraw for the countdown tick (called every second).
-// Only redraws when aircraft positions/ETAs actually change.
-// Uses 1-second resolution (was 5-second) so the profile updates every second.
-function redrawActiveProfile() {
-    if (!_activeProfileTxKey || !_activeProfileTxObj) return;
-    const rx = getRxCoords(); if (!rx) return;
+    function redrawActiveProfile() {
+        if (!_activeProfileTxKey || !_activeProfileTxObj) return;
+        const rx = getRxCoords(); if (!rx) return;
 
-    const allVisible  = getActiveVisibleCrossings();
-    const matchingCrs = allVisible.filter(c =>
-        (c.tx.lat + '_' + c.tx.lon + '_' + c.tx.freq) === _activeProfileTxKey
-    );
+        const allVisible  = getActiveVisibleCrossings();
+        const matchingCrs = allVisible.filter(c =>
+            (c.tx.lat + '_' + c.tx.lon + '_' + c.tx.freq) === _activeProfileTxKey
+        );
 
-    // Round to 1-second buckets (was 5) → profile redraws every second
-    const newHash = matchingCrs.map(c =>
-        c.ac.icao24 + ':' + Math.round(c.liveEta)
-    ).join('|');
-    if (newHash === _lastProfileHash) return;
-    _lastProfileHash = newHash;
+        const newHash = matchingCrs.map(c =>
+            c.ac.icao24 + ':' + Math.round(c.liveEta)
+        ).join('|');
+        if (newHash === _lastProfileHash) return;
+        _lastProfileHash = newHash;
 
-    drawProfile(matchingCrs, _currentPathElevs, rx, _activeProfileTxObj);
-}
+        drawProfile(matchingCrs, _currentPathElevs, rx, _activeProfileTxObj);
+    }
 
-
-
-    // ── Compute the "sweet spot" corridor for ideal airplane scatter ───────
-    // Based on kkonrad's expert advice:
-    //   RX side : plane must be AT MOST ~5° elevation from RX
-    //             → ceiling from RX: rxAltM + x_km * 1000 * tan(5°)
-    //   TX side : plane must be AT MOST ~1° elevation from TX (just above horizon)
-    //             → ceiling from TX: txAltM + d_tx_km * 1000 * tan(1°)
-    //
-    // The sweet spot = altitude band between:
-    //   floor   = max(hrx_arr[i], htx_arr[i])  ← purple zone top (must be visible from both)
-    //   ceiling = min(rxAngleCeil, txAngleCeil) ← must be LOW from both sides
-    //
-    // The plane must be INSIDE the purple zone (above floor) AND
-    // below both angle ceilings (not too high in elevation from either end).
     function computeSweetSpotCorridor(elevs, d_txrx, rxAltM, txAltM, hrx_arr, htx_arr) {
         if (!elevs || elevs.length < 2 || !hrx_arr || !htx_arr) return [];
 
         const stepKm     = d_txrx / (elevs.length - 1);
         const DEG_TO_RAD = Math.PI / 180;
 
-        // kkonrad: RX sees plane at ≤ 5°, TX sees plane at ≤ 1°
         const RX_ANGLE_DEG = 5.0;
         const TX_ANGLE_DEG = 1.0;
 
@@ -1624,26 +1604,20 @@ function redrawActiveProfile() {
         const corridor = [];
 
         for (let i = 1; i < elevs.length - 1; i++) {
-            const x    = i * stepKm;    // distance from RX [km]
-            const d_tx = d_txrx - x;   // distance from TX [km]
+            const x    = i * stepKm;    
+            const d_tx = d_txrx - x;   
 
             if (x < 1 || d_tx < 1) continue;
 
-            // ── Purple zone floor: plane must be visible from both ends ────
             const sweetFloor = Math.max(hrx_arr[i], htx_arr[i]);
 
-            // ── Angle ceilings measured from the actual endpoint altitudes ─
-            // NOT from the running envelope – that was the bug before
-            const rxAngleCeil = rxAltM + x    * 1000 * tanRx;   // ≤5° from RX
-            const txAngleCeil = txAltM + d_tx * 1000 * tanTx;   // ≤1° from TX
+            const rxAngleCeil = rxAltM + x    * 1000 * tanRx;   
+            const txAngleCeil = txAltM + d_tx * 1000 * tanTx;   
 
-            // Sweet spot ceiling = lower of the two angle lines
             const sweetCeil = Math.min(rxAngleCeil, txAngleCeil);
 
-            // No sweet spot if ceiling is at or below floor
             if (sweetCeil <= sweetFloor) continue;
 
-            // Must be above terrain
             const terrainHere = elevs[i];
             if (sweetCeil < terrainHere) continue;
 
@@ -1746,7 +1720,6 @@ function redrawActiveProfile() {
         const mapX = xKm => padL + (xKm - profMinX) * scaleX;
         const mapY = zM  => h - padB - (zM - minH) * scaleY;
 
-        // ── Y-axis labels & grid lines ────────────────────────────────────
         ctx.fillStyle = '#668'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
         for (let i = 0; i <= 4; i++) {
             const levelM = minH + (maxH - minH) * (i / 4);
@@ -1758,13 +1731,11 @@ function redrawActiveProfile() {
 
         ctx.save(); ctx.beginPath(); ctx.rect(padL, padT, drawW, drawH); ctx.clip();
 
-        // ── Determine highest plane for purple region clip ─────────────────
         let highestPlaneM = 12000;
         if (planeData.length > 0) {
             highestPlaneM = Math.max(12000, Math.max(...planeData.map(p => p.acAltM)) + 1000);
         }
 
-        // ── Purple visibility zone (existing) ─────────────────────────────
         ctx.save();
         ctx.beginPath();
         ctx.rect(padL, mapY(highestPlaneM), drawW, (h - padB) - mapY(highestPlaneM));
@@ -1784,28 +1755,19 @@ function redrawActiveProfile() {
         }
         ctx.restore();
 
-        // ── RX horizon line (red) ─────────────────────────────────────────
         ctx.beginPath();
         losFloor.forEach((pt, i) => i === 0 ? ctx.moveTo(mapX(pt.x), mapY(pt.hrx)) : ctx.lineTo(mapX(pt.x), mapY(pt.hrx)));
         ctx.strokeStyle = 'rgba(255, 50, 50, 0.8)'; ctx.lineWidth = 1.5; ctx.stroke();
 
-        // ── TX horizon line (yellow) ──────────────────────────────────────
         ctx.beginPath();
         losFloor.forEach((pt, i) => i === 0 ? ctx.moveTo(mapX(pt.x), mapY(pt.htx)) : ctx.lineTo(mapX(pt.x), mapY(pt.htx)));
         ctx.strokeStyle = 'rgba(255, 200, 50, 0.8)'; ctx.lineWidth = 1.5; ctx.stroke();
 
-        // ── Sweet spot corridor ────────────────────────────────────────────
-        // Highlight the altitude band where the plane achieves the ideal
-        // elevation angles simultaneously at both TX (0–1°) and RX (4–5°).
-        // Drawn as a filled semi-transparent green band + upper/lower boundaries.
-               // ── Draw sweet spot corridor (green, inside purple zone) ──────────
         const sweetSpot = computeSweetSpotCorridor(elevs, d_txrx, rxAltM, txAltM, hrx_arr, htx_arr);
 
         if (sweetSpot.length > 1) {
-            // Draw as filled polygon: top edge (maxH), then bottom edge (minH) reversed
             ctx.save();
             ctx.beginPath();
-            // Top edge (left to right)
             let started = false;
             for (let k = 0; k < sweetSpot.length; k++) {
                 const pt = sweetSpot[k];
@@ -1815,7 +1777,6 @@ function redrawActiveProfile() {
                 if (!started) { ctx.moveTo(cx, cy); started = true; }
                 else ctx.lineTo(cx, cy);
             }
-            // Bottom edge (right to left)
             for (let k = sweetSpot.length - 1; k >= 0; k--) {
                 const pt = sweetSpot[k];
                 const cx = mapX(pt.x);
@@ -1827,7 +1788,6 @@ function redrawActiveProfile() {
             ctx.fillStyle = 'rgba(0, 255, 80, 0.35)';
             ctx.fill();
 
-            // Top border line (RX 4° / TX 1° ceiling)
             ctx.beginPath();
             started = false;
             for (let k = 0; k < sweetSpot.length; k++) {
@@ -1845,8 +1805,6 @@ function redrawActiveProfile() {
             ctx.setLineDash([]);
             ctx.restore();
 
-            // ── "Sweet Spot" label ────────────────────────────────────────
-            // Place it at the point with the widest band (most room)
             let bestBand = -1, bestIdx = -1;
             for (let k = 0; k < sweetSpot.length; k++) {
                 const band = sweetSpot[k].maxH - sweetSpot[k].minH;
@@ -1869,13 +1827,11 @@ function redrawActiveProfile() {
             }
         }
 
-        // ── Terrain fill ──────────────────────────────────────────────────
         ctx.beginPath(); ctx.moveTo(mapX(0), h - padB);
         for(let i=0; i<elevs.length; i++) ctx.lineTo(mapX(i * stepKm), mapY(elevs[i]));
         ctx.lineTo(mapX(d_txrx), h - padB); ctx.closePath();
         ctx.fillStyle = '#1e3050'; ctx.fill(); ctx.strokeStyle = '#2a4a7a'; ctx.lineWidth = 2; ctx.stroke();
 
-        // ── Aircraft dots & labels ────────────────────────────────────────
         const drawnLabels = [];
 
         planeData.forEach(p => {
@@ -1917,14 +1873,12 @@ function redrawActiveProfile() {
             ctx.fillText(labelStr, textX, textY);
         });
 
-        // ── RX / TX antenna stubs ─────────────────────────────────────────
         ctx.strokeStyle = '#668'; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.moveTo(mapX(0), mapY(elevs[0])); ctx.lineTo(mapX(0), mapY(rxAltM)); ctx.stroke();
         ctx.beginPath(); ctx.moveTo(mapX(d_txrx), mapY(elevs[elevs.length-1])); ctx.lineTo(mapX(d_txrx), mapY(txAltM)); ctx.stroke();
 
         ctx.restore();
 
-        // ── X-axis distance ticks ─────────────────────────────────────────
         ctx.fillStyle = '#668';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -1956,438 +1910,413 @@ function redrawActiveProfile() {
         if (profMinX <= 0)      { ctx.fillStyle = '#adf'; ctx.textAlign = 'center'; ctx.fillText('RX', mapX(0),       h - padB + 12); }
         if (profMaxX >= d_txrx) { ctx.fillStyle = '#adf'; ctx.textAlign = 'center'; ctx.fillText('TX', mapX(d_txrx), h - padB + 12); }
     }
-	
-	function initProfileCanvasHover() {
-    const canvas = document.getElementById('as-profile-canvas');
-    if (!canvas) return;
+    
+    function initProfileCanvasHover() {
+        const canvas = document.getElementById('as-profile-canvas');
+        if (!canvas) return;
 
-    let _hoverTooltip = null;
+        let _hoverTooltip = null;
 
-    canvas.addEventListener('mousemove', (e) => {
-        if (!_activeProfileTxKey || !_activeProfileTxObj || !_currentPathElevs || _currentPathElevs.length === 0) return;
+        canvas.addEventListener('mousemove', (e) => {
+            if (!_activeProfileTxKey || !_activeProfileTxObj || !_currentPathElevs || _currentPathElevs.length === 0) return;
 
-        const rx = getRxCoords();
-        if (!rx) return;
+            const rx = getRxCoords();
+            if (!rx) return;
 
-        const tx       = _activeProfileTxObj;
-        const d_txrx   = haversineKm(tx.lat, tx.lon, rx.lat, rx.lon);
-        const elevs    = _currentPathElevs;
+            const tx       = _activeProfileTxObj;
+            const d_txrx   = haversineKm(tx.lat, tx.lon, rx.lat, rx.lon);
+            const elevs    = _currentPathElevs;
 
-        const rect  = canvas.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
+            const rect  = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
 
-        const w = canvas.width, h = canvas.height;
-        const padT = 35, padB = 25, padL = 45, padR = 35;
-        const drawW = w - padL - padR;
-        const drawH = h - padT - padB;
+            const w = canvas.width, h = canvas.height;
+            const padT = 35, padB = 25, padL = 45, padR = 35;
+            const drawW = w - padL - padR;
 
-        // Only respond inside the plot area
-        if (mouseX < padL || mouseX > w - padR || mouseY < padT || mouseY > h - padB) {
-            if (_hoverTooltip) { _hoverTooltip.remove(); _hoverTooltip = null; }
-            return;
-        }
-
-        // Convert mouse X → distance in km along the path
-        const range   = profMaxX - profMinX;
-        const xKm     = profMinX + ((mouseX - padL) / drawW) * range;
-        if (xKm < 0 || xKm > d_txrx) {
-            if (_hoverTooltip) { _hoverTooltip.remove(); _hoverTooltip = null; }
-            return;
-        }
-
-        // Interpolate terrain elevation at cursor position
-        const stepKm   = d_txrx / (elevs.length - 1);
-        const rawIdx   = xKm / stepKm;
-        const idxLo    = Math.max(0, Math.floor(rawIdx));
-        const idxHi    = Math.min(elevs.length - 1, idxLo + 1);
-        const frac     = rawIdx - idxLo;
-        const terrainM = elevs[idxLo] * (1 - frac) + elevs[idxHi] * frac;
-
-        // Endpoint altitudes
-        const txAltM = (tx.terrainM || 0) + TX_HEIGHT_DEFAULT_M;
-        const rxAltM = _rxElevM;
-
-        // Distance from each end
-        const d_rx = xKm;            // distance from RX [km]
-        const d_tx = d_txrx - xKm;  // distance from TX [km]
-
-        // Elevation angles (in degrees) from each endpoint to the terrain point at cursor
-        // Positive = above horizon, negative = below
-        const elevAngleFromRx = d_rx > 0
-            ? toDeg(Math.atan2(terrainM - rxAltM, d_rx * 1000))
-            : 0;
-        const elevAngleFromTx = d_tx > 0
-            ? toDeg(Math.atan2(terrainM - txAltM, d_tx * 1000))
-            : 0;
-
-        // Also compute angle to any aircraft currently drawn near cursor X
-        const allVisible = getActiveVisibleCrossings();
-        const matchingCrs = allVisible.filter(c =>
-            (c.tx.lat + '_' + c.tx.lon + '_' + c.tx.freq) === _activeProfileTxKey
-        );
-
-        let acLines = '';
-        matchingCrs.forEach(cr => {
-            let drLat = cr.ac.lat, drLon = cr.ac.lon;
-            if (cr.ac.track !== null && cr.ac.speed > 0) {
-                const p = deadReckon(cr.ac.lat, cr.ac.lon, cr.ac.track, cr.ac.speed, cr.elapsed);
-                drLat = p.lat; drLon = p.lon;
+            if (mouseX < padL || mouseX > w - padR || mouseY < padT || mouseY > h - padB) {
+                if (_hoverTooltip) { _hoverTooltip.remove(); _hoverTooltip = null; }
+                return;
             }
-            const { alongTrackKm } = crossAlongTrack(rx.lat, rx.lon, tx.lat, tx.lon, drLat, drLon);
-            const acAltM = (cr.ac.alt_ft || 0) * 0.3048;
 
-            // Only show if aircraft is within ±30 km of cursor
-            if (Math.abs(alongTrackKm - xKm) > 30) return;
+            const range   = profMaxX - profMinX;
+            const xKm     = profMinX + ((mouseX - padL) / drawW) * range;
+            if (xKm < 0 || xKm > d_txrx) {
+                if (_hoverTooltip) { _hoverTooltip.remove(); _hoverTooltip = null; }
+                return;
+            }
 
-            const dAcRx = alongTrackKm;
-            const dAcTx = d_txrx - alongTrackKm;
+            const stepKm   = d_txrx / (elevs.length - 1);
+            const rawIdx   = xKm / stepKm;
+            const idxLo    = Math.max(0, Math.floor(rawIdx));
+            const idxHi    = Math.min(elevs.length - 1, idxLo + 1);
+            const frac     = rawIdx - idxLo;
+            const terrainM = elevs[idxLo] * (1 - frac) + elevs[idxHi] * frac;
 
-            const acElRx = dAcRx > 0 ? toDeg(Math.atan2(acAltM - rxAltM, dAcRx * 1000)) : 0;
-            const acElTx = dAcTx > 0 ? toDeg(Math.atan2(acAltM - txAltM, dAcTx * 1000)) : 0;
+            const txAltM = (tx.terrainM || 0) + TX_HEIGHT_DEFAULT_M;
+            const rxAltM = _rxElevM;
 
-            const cs = (cr.ac.callsign || cr.ac.icao24).toUpperCase();
-            acLines += `
-                <tr><td colspan="2" style="color:#ffcc00;padding-top:5px;font-weight:bold;">✈ ${cs}</td></tr>
-                <tr>
-                    <td style="color:#889;">El. from RX</td>
-                    <td style="color:#5af;text-align:right;">${acElRx.toFixed(2)}°</td>
-                </tr>
-                <tr>
-                    <td style="color:#889;">El. from TX</td>
-                    <td style="color:#fa0;text-align:right;">${acElTx.toFixed(2)}°</td>
-                </tr>`;
+            const d_rx = xKm;            
+            const d_tx = d_txrx - xKm;  
+
+            const elevAngleFromRx = d_rx > 0
+                ? toDeg(Math.atan2(terrainM - rxAltM, d_rx * 1000))
+                : 0;
+            const elevAngleFromTx = d_tx > 0
+                ? toDeg(Math.atan2(terrainM - txAltM, d_tx * 1000))
+                : 0;
+
+            const allVisible = getActiveVisibleCrossings();
+            const matchingCrs = allVisible.filter(c =>
+                (c.tx.lat + '_' + c.tx.lon + '_' + c.tx.freq) === _activeProfileTxKey
+            );
+
+            let acLines = '';
+            matchingCrs.forEach(cr => {
+                let drLat = cr.ac.lat, drLon = cr.ac.lon;
+                if (cr.ac.track !== null && cr.ac.speed > 0) {
+                    const p = deadReckon(cr.ac.lat, cr.ac.lon, cr.ac.track, cr.ac.speed, cr.elapsed);
+                    drLat = p.lat; drLon = p.lon;
+                }
+                const { alongTrackKm } = crossAlongTrack(rx.lat, rx.lon, tx.lat, tx.lon, drLat, drLon);
+                const acAltM = (cr.ac.alt_ft || 0) * 0.3048;
+
+                if (Math.abs(alongTrackKm - xKm) > 30) return;
+
+                const dAcRx = alongTrackKm;
+                const dAcTx = d_txrx - alongTrackKm;
+
+                const acElRx = dAcRx > 0 ? toDeg(Math.atan2(acAltM - rxAltM, dAcRx * 1000)) : 0;
+                const acElTx = dAcTx > 0 ? toDeg(Math.atan2(acAltM - txAltM, dAcTx * 1000)) : 0;
+
+                const cs = (cr.ac.callsign || cr.ac.icao24).toUpperCase();
+                acLines += `
+                    <tr><td colspan="2" style="color:#ffcc00;padding-top:5px;font-weight:bold;">✈ ${cs}</td></tr>
+                    <tr>
+                        <td style="color:#889;">El. from RX</td>
+                        <td style="color:#5af;text-align:right;">${acElRx.toFixed(2)}°</td>
+                    </tr>
+                    <tr>
+                        <td style="color:#889;">El. from TX</td>
+                        <td style="color:#fa0;text-align:right;">${acElTx.toFixed(2)}°</td>
+                    </tr>`;
+            });
+
+            const distDisp = S.useMetric
+                ? xKm.toFixed(1) + ' km'
+                : (xKm * 0.621371).toFixed(1) + ' mi';
+
+            const html = `
+                <div style="
+                    position:fixed;
+                    left:${e.clientX + 14}px;
+                    top:${e.clientY - 10}px;
+                    z-index:99999;
+                    background:rgba(13,20,32,0.97);
+                    border:1px solid #2a4a7a;
+                    border-radius:6px;
+                    padding:8px 12px;
+                    font-size:11px;
+                    color:#cde;
+                    pointer-events:none;
+                    box-shadow:0 4px 16px rgba(0,0,0,0.7);
+                    min-width:160px;
+                ">
+                    <table style="border-collapse:collapse;width:100%;">
+                        <tr>
+                            <td style="color:#889;">Distance (RX)</td>
+                            <td style="color:#fff;text-align:right;">${distDisp}</td>
+                        </tr>
+                        <tr>
+                            <td style="color:#889;">Distance (TX)</td>
+                            <td style="color:#fff;text-align:right;">${S.useMetric ? d_tx.toFixed(1) + ' km' : (d_tx * 0.621371).toFixed(1) + ' mi'}</td>
+                        </tr>
+                        <tr>
+                            <td style="color:#889;">Terrain</td>
+                            <td style="color:#fff;text-align:right;">${Math.round(terrainM)} m</td>
+                        </tr>
+                        <tr><td colspan="2" style="border-top:1px solid #2a4a7a;padding-top:4px;"></td></tr>
+                        <tr>
+                            <td style="color:#889;">El. angle (RX)</td>
+                            <td style="color:#f55;text-align:right;">${elevAngleFromRx.toFixed(2)}°</td>
+                        </tr>
+                        <tr>
+                            <td style="color:#889;">El. angle (TX)</td>
+                            <td style="color:#fc0;text-align:right;">${elevAngleFromTx.toFixed(2)}°</td>
+                        </tr>
+                        ${acLines}
+                    </table>
+                </div>`;
+
+            if (!_hoverTooltip) {
+                _hoverTooltip = document.createElement('div');
+                document.body.appendChild(_hoverTooltip);
+            }
+            _hoverTooltip.innerHTML = html;
         });
 
-        const distDisp = S.useMetric
-            ? xKm.toFixed(1) + ' km'
-            : (xKm * 0.621371).toFixed(1) + ' mi';
-
-        const html = `
-            <div style="
-                position:fixed;
-                left:${e.clientX + 14}px;
-                top:${e.clientY - 10}px;
-                z-index:99999;
-                background:rgba(13,20,32,0.97);
-                border:1px solid #2a4a7a;
-                border-radius:6px;
-                padding:8px 12px;
-                font-size:11px;
-                color:#cde;
-                pointer-events:none;
-                box-shadow:0 4px 16px rgba(0,0,0,0.7);
-                min-width:160px;
-            ">
-                <table style="border-collapse:collapse;width:100%;">
-                    <tr>
-                        <td style="color:#889;">Distance (RX)</td>
-                        <td style="color:#fff;text-align:right;">${distDisp}</td>
-                    </tr>
-                    <tr>
-                        <td style="color:#889;">Distance (TX)</td>
-                        <td style="color:#fff;text-align:right;">${S.useMetric ? d_tx.toFixed(1) + ' km' : (d_tx * 0.621371).toFixed(1) + ' mi'}</td>
-                    </tr>
-                    <tr>
-                        <td style="color:#889;">Terrain</td>
-                        <td style="color:#fff;text-align:right;">${Math.round(terrainM)} m</td>
-                    </tr>
-                    <tr><td colspan="2" style="border-top:1px solid #2a4a7a;padding-top:4px;"></td></tr>
-                    <tr>
-                        <td style="color:#889;">El. angle (RX)</td>
-                        <td style="color:#f55;text-align:right;">${elevAngleFromRx.toFixed(2)}°</td>
-                    </tr>
-                    <tr>
-                        <td style="color:#889;">El. angle (TX)</td>
-                        <td style="color:#fc0;text-align:right;">${elevAngleFromTx.toFixed(2)}°</td>
-                    </tr>
-                    ${acLines}
-                </table>
-            </div>`;
-
-        if (!_hoverTooltip) {
-            _hoverTooltip = document.createElement('div');
-            document.body.appendChild(_hoverTooltip);
-        }
-        _hoverTooltip.innerHTML = html;
-    });
-
-    canvas.addEventListener('mouseleave', () => {
-        if (_hoverTooltip) { _hoverTooltip.remove(); _hoverTooltip = null; }
-    });
-}
-
-
-// ── Terrain-envelope cache keyed by TX ────────────────────────────────────
-// The TX positions are fixed; only the aircraft move.
-// Building Float64Arrays for every AC×TX pair was the single biggest CPU sink.
-// We compute each TX envelope once per RX position and reuse it.
-const _txEnvelopeCache = new Map();
-
-function invalidateTxEnvelopeCache() {
-    _txEnvelopeCache.clear();
-}
-
-function getTxEnvelope(tx, rxLat, rxLon, rxElevM) {
-    const txKey = tx.lat + '_' + tx.lon + '_' + tx.freq;
-    if (_txEnvelopeCache.has(txKey)) return _txEnvelopeCache.get(txKey);
-
-    const txLat  = parseFloat(tx.lat);
-    const txLon  = parseFloat(tx.lon);
-    const txEffM = (tx.terrainM || 0) + TX_HEIGHT_DEFAULT_M;
-    const d_txrx = haversineKm(txLat, txLon, rxLat, rxLon);
-
-    // ── Use high-res path elevations if available for this TX, ─────────────
-    // otherwise fall back to the coarse _elevCache interpolation.
-    // This ensures scoring and the elevation profile canvas use identical data.
-    let sampledElevs;
-    const pathCacheKey = rxLat.toFixed(2) + '_' + rxLon.toFixed(2) + '_' + txKey;
-
-    if (_pathElevCache[pathCacheKey] && _pathElevCache[pathCacheKey].length >= 50) {
-        // High-res data already fetched – resample to NUM_SAMPLES for consistency
-        const src     = _pathElevCache[pathCacheKey];
-        const NUM     = src.length;
-        sampledElevs  = new Float64Array(NUM);
-        for (let i = 0; i < NUM; i++) sampledElevs[i] = src[i];
-    } else {
-        // Coarse fallback from point cache
-        const NUM    = 50;
-        const stepKm = d_txrx / (NUM - 1);
-        const brg    = bearingDeg(rxLat, rxLon, txLat, txLon);
-        sampledElevs = new Float64Array(NUM);
-        for (let i = 0; i < NUM; i++) {
-            const distKm = i * stepKm;
-            const pt     = deadReckonRad(rxLat, rxLon, brg, distKm);
-            const key    = pt.lat.toFixed(4) + '_' + pt.lon.toFixed(4);
-            sampledElevs[i] = _elevCache[key] || 0;
-        }
+        canvas.addEventListener('mouseleave', () => {
+            if (_hoverTooltip) { _hoverTooltip.remove(); _hoverTooltip = null; }
+        });
     }
 
-    const NUM_SAMPLES = sampledElevs.length;
-    const stepKm      = d_txrx / (NUM_SAMPLES - 1);
-    const c_factor    = 16.974;
+    const _txEnvelopeCache = new Map();
 
-    // RX horizon envelope
-    let m_max_rx = -Infinity;
-    const hrx_env = new Float64Array(NUM_SAMPLES);
-    for (let i = 0; i < NUM_SAMPLES; i++) {
-        const x = i * stepKm;
-        if (x === 0) { hrx_env[i] = rxElevM; continue; }
-        const c_drop = (x * x) / c_factor;
-        const m = (sampledElevs[i] - rxElevM - c_drop) / x;
-        if (m > m_max_rx) m_max_rx = m;
-        hrx_env[i] = rxElevM + m_max_rx * x + c_drop;
+    function invalidateTxEnvelopeCache() {
+        _txEnvelopeCache.clear();
     }
 
-    // TX horizon envelope
-    let m_max_tx = -Infinity;
-    const htx_env = new Float64Array(NUM_SAMPLES);
-    for (let i = NUM_SAMPLES - 1; i >= 0; i--) {
-        const d_tx_i = d_txrx - (i * stepKm);
-        if (d_tx_i === 0) { htx_env[i] = txEffM; continue; }
-        const c_drop = (d_tx_i * d_tx_i) / c_factor;
-        const m = (sampledElevs[i] - txEffM - c_drop) / d_tx_i;
-        if (m > m_max_tx) m_max_tx = m;
-        htx_env[i] = txEffM + m_max_tx * d_tx_i + c_drop;
-    }
-
-    const result = { hrx_env, htx_env, stepKm, d_txrx, txEffM };
-    _txEnvelopeCache.set(txKey, result);
-    return result;
-}
-
-// ── Map Drawing ──────────────────────────────────────────────────────
-function drawStaticLayers(crossings, rxLat, rxLon) {
-    if (!mapInstance || !txLayer || !lineLayer) return;
-
-    const activeKeys = new Set();
-    const refAltM = 12000;
-
-    crossings.forEach(cr => {
-        const { tx, score } = cr;
+    function getTxEnvelope(tx, rxLat, rxLon, rxElevM) {
         const txKey = tx.lat + '_' + tx.lon + '_' + tx.freq;
-        const color = scoreColor(score);
-        const isHighlighted = (_activeTxKey === txKey) || (_activeProfileTxKey === txKey);
+        if (_txEnvelopeCache.has(txKey)) return _txEnvelopeCache.get(txKey);
 
-        activeKeys.add(txKey);
+        const txLat  = parseFloat(tx.lat);
+        const txLon  = parseFloat(tx.lon);
+        const txEffM = (tx.terrainM || 0) + TX_HEIGHT_DEFAULT_M;
+        const d_txrx = haversineKm(txLat, txLon, rxLat, rxLon);
 
-        const fullPathPts = generatePathPoints(rxLat, rxLon, tx.lat, tx.lon, 50);
-        const fullPathCoords = fullPathPts.map(p => [p.lat, p.lon]);
+        let sampledElevs;
+        const pathCacheKey = rxLat.toFixed(2) + '_' + rxLon.toFixed(2) + '_' + txKey;
 
-        let bgCoords = fullPathCoords;
-        let overlapOpacity = 0;
-        
-        let sweetCoords = fullPathCoords;
-        let sweetOpacity = 0;
-
-        if (isHighlighted && _currentPathElevs && _currentPathElevs.length > 0) {
-            const overlap = getOverlapDistances(rxLat, rxLon, tx.lat, tx.lon, tx.terrainM, _currentPathElevs, refAltM);
-            if (overlap) {
-                const brg = bearingDeg(rxLat, rxLon, tx.lat, tx.lon);
-                const segCoords = [];
-                const steps = 25;
-                const stepDist = (overlap.endDist - overlap.startDist) / (steps - 1);
-                for (let i = 0; i < steps; i++) {
-                    const d = overlap.startDist + i * stepDist;
-                    const p = deadReckonRad(rxLat, rxLon, brg, d);
-                    segCoords.push([p.lat, p.lon]);
-                }
-                bgCoords = segCoords;
-                overlapOpacity = 0.45;
+        if (_pathElevCache[pathCacheKey] && _pathElevCache[pathCacheKey].length >= 50) {
+            const src     = _pathElevCache[pathCacheKey];
+            const NUM     = src.length;
+            sampledElevs  = new Float64Array(NUM);
+            for (let i = 0; i < NUM; i++) sampledElevs[i] = src[i];
+        } else {
+            const NUM    = 50;
+            const stepKm = d_txrx / (NUM - 1);
+            const brg    = bearingDeg(rxLat, rxLon, txLat, txLon);
+            sampledElevs = new Float64Array(NUM);
+            for (let i = 0; i < NUM; i++) {
+                const distKm = i * stepKm;
+                const pt     = deadReckonRad(rxLat, rxLon, brg, distKm);
+                const key    = pt.lat.toFixed(4) + '_' + pt.lon.toFixed(4);
+                sampledElevs[i] = _elevCache[key] || 0;
             }
+        }
 
-            // Calculate Sweet Spot corridor for the map
-            const env = getTxEnvelope(tx, rxLat, rxLon, _rxElevM);
-            const txAltM = (tx.terrainM || 0) + TX_HEIGHT_DEFAULT_M;
+        const NUM_SAMPLES = sampledElevs.length;
+        const stepKm      = d_txrx / (NUM_SAMPLES - 1);
+        const c_factor    = 16.974;
+
+        let m_max_rx = -Infinity;
+        const hrx_env = new Float64Array(NUM_SAMPLES);
+        for (let i = 0; i < NUM_SAMPLES; i++) {
+            const x = i * stepKm;
+            if (x === 0) { hrx_env[i] = rxElevM; continue; }
+            const c_drop = (x * x) / c_factor;
+            const m = (sampledElevs[i] - rxElevM - c_drop) / x;
+            if (m > m_max_rx) m_max_rx = m;
+            hrx_env[i] = rxElevM + m_max_rx * x + c_drop;
+        }
+
+        let m_max_tx = -Infinity;
+        const htx_env = new Float64Array(NUM_SAMPLES);
+        for (let i = NUM_SAMPLES - 1; i >= 0; i--) {
+            const d_tx_i = d_txrx - (i * stepKm);
+            if (d_tx_i === 0) { htx_env[i] = txEffM; continue; }
+            const c_drop = (d_tx_i * d_tx_i) / c_factor;
+            const m = (sampledElevs[i] - txEffM - c_drop) / d_tx_i;
+            if (m > m_max_tx) m_max_tx = m;
+            htx_env[i] = txEffM + m_max_tx * d_tx_i + c_drop;
+        }
+
+        const result = { hrx_env, htx_env, stepKm, d_txrx, txEffM };
+        _txEnvelopeCache.set(txKey, result);
+        return result;
+    }
+
+    function drawStaticLayers(crossings, rxLat, rxLon) {
+        if (!mapInstance || !txLayer || !lineLayer) return;
+
+        const activeKeys = new Set();
+        const refAltM = 12000;
+
+        crossings.forEach(cr => {
+            const { tx, score } = cr;
+            const txKey = tx.lat + '_' + tx.lon + '_' + tx.freq;
+            const color = scoreColor(score);
+            const isHighlighted = (_activeTxKey === txKey) || (_activeProfileTxKey === txKey);
+
+            activeKeys.add(txKey);
+
+            const fullPathPts = generatePathPoints(rxLat, rxLon, tx.lat, tx.lon, 50);
+            const fullPathCoords = fullPathPts.map(p => [p.lat, p.lon]);
+
+            let bgCoords = fullPathCoords;
+            let overlapOpacity = 0;
             
-            if (_currentPathElevs.length === env.hrx_env.length) {
-                const sweetSpot = computeSweetSpotCorridor(_currentPathElevs, env.d_txrx, _rxElevM, txAltM, env.hrx_env, env.htx_env);
-                if (sweetSpot && sweetSpot.length > 1) {
+            let sweetCoords = fullPathCoords;
+            let sweetOpacity = 0;
+
+            if (isHighlighted && _currentPathElevs && _currentPathElevs.length > 0) {
+                const overlap = getOverlapDistances(rxLat, rxLon, tx.lat, tx.lon, tx.terrainM, _currentPathElevs, refAltM);
+                if (overlap) {
                     const brg = bearingDeg(rxLat, rxLon, tx.lat, tx.lon);
-                    const startDist = sweetSpot[0].x;
-                    const endDist = sweetSpot[sweetSpot.length - 1].x;
                     const segCoords = [];
                     const steps = 25;
-                    const stepDist = (endDist - startDist) / (steps - 1);
+                    const stepDist = (overlap.endDist - overlap.startDist) / (steps - 1);
                     for (let i = 0; i < steps; i++) {
-                        const d = startDist + i * stepDist;
+                        const d = overlap.startDist + i * stepDist;
                         const p = deadReckonRad(rxLat, rxLon, brg, d);
                         segCoords.push([p.lat, p.lon]);
                     }
-                    sweetCoords = segCoords;
-                    sweetOpacity = 1.0; // Changed from 0.9 to 1.0 for zero transparency
+                    bgCoords = segCoords;
+                    overlapOpacity = 0.45;
+                }
+
+                const env = getTxEnvelope(tx, rxLat, rxLon, _rxElevM);
+                const txAltM = (tx.terrainM || 0) + TX_HEIGHT_DEFAULT_M;
+                
+                if (_currentPathElevs.length === env.hrx_env.length) {
+                    const sweetSpot = computeSweetSpotCorridor(_currentPathElevs, env.d_txrx, _rxElevM, txAltM, env.hrx_env, env.htx_env);
+                    if (sweetSpot && sweetSpot.length > 1) {
+                        const brg = bearingDeg(rxLat, rxLon, tx.lat, tx.lon);
+                        const startDist = sweetSpot[0].x;
+                        const endDist = sweetSpot[sweetSpot.length - 1].x;
+                        const segCoords = [];
+                        const steps = 25;
+                        const stepDist = (endDist - startDist) / (steps - 1);
+                        for (let i = 0; i < steps; i++) {
+                            const d = startDist + i * stepDist;
+                            const p = deadReckonRad(rxLat, rxLon, brg, d);
+                            segCoords.push([p.lat, p.lon]);
+                        }
+                        sweetCoords = segCoords;
+                        sweetOpacity = 1.0; 
+                    }
+                }
+            }
+
+            if (!_txElements[txKey]) {
+                const visualLineBg = L.polyline(bgCoords, {
+                    color: '#c832ff', weight: 8, opacity: overlapOpacity, interactive: false
+                }).addTo(lineLayer);
+
+                const visualLineSweet = L.polyline(sweetCoords, {
+                    color: '#00ff50', weight: 4, opacity: sweetOpacity, dashArray: '', interactive: false
+                }).addTo(lineLayer);
+
+                const visualLine = L.polyline(fullPathCoords, {
+                    color, weight: isHighlighted ? 2.5 : 1.6, opacity: isHighlighted ? 0.85 : 0.55,
+                    dashArray: '8 5', interactive: false
+                }).addTo(lineLayer);
+
+                const txM = L.marker([tx.lat, tx.lon], {
+                    icon: txDotIcon(color, tx.erp, isHighlighted),
+                    zIndexOffset: isHighlighted ? 200 : 100
+                });
+                txM.bindTooltip(buildTxTooltip(tx, rxLat, rxLon), {
+                    direction: 'top', sticky: true, className: 'as-ac-tooltip-wrap', opacity: 1
+                });
+                txM.on('click', (e) => { L.DomEvent.stopPropagation(e); showTxDetails(txKey, tx); });
+                txLayer.addLayer(txM);
+
+                _txElements[txKey] = { visualLine, visualLineBg, visualLineSweet, txM, baseColor: color, erp: tx.erp, isHighlighted };
+            } else {
+                const t = _txElements[txKey];
+                if (isHighlighted) {
+                    t.visualLineBg.setLatLngs(bgCoords);
+                    t.visualLineSweet.setLatLngs(sweetCoords);
+                }
+                t.visualLine.setLatLngs(fullPathCoords);
+                t.visualLineBg.setStyle({ opacity: overlapOpacity });
+                t.visualLineSweet.setStyle({ opacity: sweetOpacity });
+
+                if (t.baseColor !== color || t.isHighlighted !== isHighlighted) {
+                    t.baseColor = color;
+                    t.isHighlighted = isHighlighted;
+                    t.visualLine.setStyle({ color, weight: isHighlighted ? 2.5 : 1.6, opacity: isHighlighted ? 0.85 : 0.55 });
+                    t.txM.setIcon(txDotIcon(color, t.erp, isHighlighted));
+                    t.txM.setZIndexOffset(isHighlighted ? 200 : 100);
+                }
+            }
+        });
+
+        const persistPairs = [
+            { key: _activeTxKey,        tx: _activeTxObj },
+            { key: _activeProfileTxKey, tx: _activeProfileTxObj }
+        ];
+
+        for (const { key: pKey, tx: persistTx } of persistPairs) {
+            if (!pKey || !persistTx) continue;
+            if (activeKeys.has(pKey)) continue;
+
+            activeKeys.add(pKey);
+
+            const tx = persistTx;
+            const color = '#4aaeff';
+            const isHighlighted = true;
+
+            const fullPathPts = generatePathPoints(rxLat, rxLon, tx.lat, tx.lon, 50);
+            const fullPathCoords = fullPathPts.map(p => [p.lat, p.lon]);
+
+            if (!_txElements[pKey]) {
+                const visualLineBg = L.polyline(fullPathCoords, {
+                    color: '#c832ff', weight: 8, opacity: 0, interactive: false
+                }).addTo(lineLayer);
+
+                const visualLineSweet = L.polyline(fullPathCoords, {
+                    color: '#00ff50', weight: 4, opacity: 0, interactive: false
+                }).addTo(lineLayer);
+
+                const visualLine = L.polyline(fullPathCoords, {
+                    color, weight: 2.5, opacity: 0,
+                    dashArray: '8 5', interactive: false
+                }).addTo(lineLayer);
+
+                const txM = L.marker([tx.lat, tx.lon], {
+                    icon: txDotIcon(color, tx.erp, isHighlighted),
+                    zIndexOffset: 200
+                });
+                txM.bindTooltip(buildTxTooltip(tx, rxLat, rxLon), {
+                    direction: 'top', sticky: true, className: 'as-ac-tooltip-wrap', opacity: 1
+                });
+                txM.on('click', (e) => { L.DomEvent.stopPropagation(e); showTxDetails(pKey, tx); });
+                txLayer.addLayer(txM);
+
+                _txElements[pKey] = { visualLine, visualLineBg, visualLineSweet, txM, baseColor: color, erp: tx.erp, isHighlighted, dotOnly: true };
+            } else {
+                const t = _txElements[pKey];
+                if (!t.dotOnly) {
+                    t.dotOnly = true;
+                    t.baseColor = color;
+                    t.isHighlighted = true;
+                    t.visualLine.setStyle({ opacity: 0 });
+                    t.visualLineBg.setStyle({ opacity: 0 });
+                    if (t.visualLineSweet) t.visualLineSweet.setStyle({ opacity: 0 });
+                    t.txM.setIcon(txDotIcon(color, t.erp, true));
+                    t.txM.setZIndexOffset(200);
                 }
             }
         }
 
-        if (!_txElements[txKey]) {
-            const visualLineBg = L.polyline(bgCoords, {
-                color: '#c832ff', weight: 8, opacity: overlapOpacity, interactive: false
-            }).addTo(lineLayer);
-
-            const visualLineSweet = L.polyline(sweetCoords, {
-                color: '#00ff50', weight: 4, opacity: sweetOpacity, dashArray: '', interactive: false
-            }).addTo(lineLayer);
-
-            const visualLine = L.polyline(fullPathCoords, {
-                color, weight: isHighlighted ? 2.5 : 1.6, opacity: isHighlighted ? 0.85 : 0.55,
-                dashArray: '8 5', interactive: false
-            }).addTo(lineLayer);
-
-            const txM = L.marker([tx.lat, tx.lon], {
-                icon: txDotIcon(color, tx.erp, isHighlighted),
-                zIndexOffset: isHighlighted ? 200 : 100
-            });
-            txM.bindTooltip(buildTxTooltip(tx, rxLat, rxLon), {
-                direction: 'top', sticky: true, className: 'as-ac-tooltip-wrap', opacity: 1
-            });
-            txM.on('click', (e) => { L.DomEvent.stopPropagation(e); showTxDetails(txKey, tx); });
-            txLayer.addLayer(txM);
-
-            _txElements[txKey] = { visualLine, visualLineBg, visualLineSweet, txM, baseColor: color, erp: tx.erp, isHighlighted };
-        } else {
-            const t = _txElements[txKey];
-            if (isHighlighted) {
-                t.visualLineBg.setLatLngs(bgCoords);
-                t.visualLineSweet.setLatLngs(sweetCoords);
-            }
-            t.visualLine.setLatLngs(fullPathCoords);
-            t.visualLineBg.setStyle({ opacity: overlapOpacity });
-            t.visualLineSweet.setStyle({ opacity: sweetOpacity });
-
-            if (t.baseColor !== color || t.isHighlighted !== isHighlighted) {
-                t.baseColor = color;
-                t.isHighlighted = isHighlighted;
-                t.visualLine.setStyle({ color, weight: isHighlighted ? 2.5 : 1.6, opacity: isHighlighted ? 0.85 : 0.55 });
-                t.txM.setIcon(txDotIcon(color, t.erp, isHighlighted));
-                t.txM.setZIndexOffset(isHighlighted ? 200 : 100);
+        for (const cr of crossings) {
+            const txKey = cr.tx.lat + '_' + cr.tx.lon + '_' + cr.tx.freq;
+            if (_txElements[txKey] && _txElements[txKey].dotOnly) {
+                _txElements[txKey].dotOnly = false;
             }
         }
-    });
 
-    const persistPairs = [
-        { key: _activeTxKey,        tx: _activeTxObj },
-        { key: _activeProfileTxKey, tx: _activeProfileTxObj }
-    ];
-
-    for (const { key: pKey, tx: persistTx } of persistPairs) {
-        if (!pKey || !persistTx) continue;
-        if (activeKeys.has(pKey)) continue;
-
-        activeKeys.add(pKey);
-
-        const tx = persistTx;
-        const color = '#4aaeff';
-        const isHighlighted = true;
-
-        const fullPathPts = generatePathPoints(rxLat, rxLon, tx.lat, tx.lon, 50);
-        const fullPathCoords = fullPathPts.map(p => [p.lat, p.lon]);
-
-        if (!_txElements[pKey]) {
-            const visualLineBg = L.polyline(fullPathCoords, {
-                color: '#c832ff', weight: 8, opacity: 0, interactive: false
-            }).addTo(lineLayer);
-
-            const visualLineSweet = L.polyline(fullPathCoords, {
-                color: '#00ff50', weight: 4, opacity: 0, interactive: false
-            }).addTo(lineLayer);
-
-            const visualLine = L.polyline(fullPathCoords, {
-                color, weight: 2.5, opacity: 0,
-                dashArray: '8 5', interactive: false
-            }).addTo(lineLayer);
-
-            const txM = L.marker([tx.lat, tx.lon], {
-                icon: txDotIcon(color, tx.erp, isHighlighted),
-                zIndexOffset: 200
-            });
-            txM.bindTooltip(buildTxTooltip(tx, rxLat, rxLon), {
-                direction: 'top', sticky: true, className: 'as-ac-tooltip-wrap', opacity: 1
-            });
-            txM.on('click', (e) => { L.DomEvent.stopPropagation(e); showTxDetails(pKey, tx); });
-            txLayer.addLayer(txM);
-
-            _txElements[pKey] = { visualLine, visualLineBg, visualLineSweet, txM, baseColor: color, erp: tx.erp, isHighlighted, dotOnly: true };
-        } else {
-            const t = _txElements[pKey];
-            if (!t.dotOnly) {
-                t.dotOnly = true;
-                t.baseColor = color;
-                t.isHighlighted = true;
-                t.visualLine.setStyle({ opacity: 0 });
-                t.visualLineBg.setStyle({ opacity: 0 });
-                if (t.visualLineSweet) t.visualLineSweet.setStyle({ opacity: 0 });
-                t.txM.setIcon(txDotIcon(color, t.erp, true));
-                t.txM.setZIndexOffset(200);
+        for (let key in _txElements) {
+            if (!activeKeys.has(key)) {
+                lineLayer.removeLayer(_txElements[key].visualLineBg);
+                if (_txElements[key].visualLineSweet) {
+                    lineLayer.removeLayer(_txElements[key].visualLineSweet);
+                }
+                lineLayer.removeLayer(_txElements[key].visualLine);
+                txLayer.removeLayer(_txElements[key].txM);
+                delete _txElements[key];
             }
         }
     }
-
-    for (const cr of crossings) {
-        const txKey = cr.tx.lat + '_' + cr.tx.lon + '_' + cr.tx.freq;
-        if (_txElements[txKey] && _txElements[txKey].dotOnly) {
-            _txElements[txKey].dotOnly = false;
-        }
-    }
-
-    for (let key in _txElements) {
-        if (!activeKeys.has(key)) {
-            lineLayer.removeLayer(_txElements[key].visualLineBg);
-            if (_txElements[key].visualLineSweet) {
-                lineLayer.removeLayer(_txElements[key].visualLineSweet);
-            }
-            lineLayer.removeLayer(_txElements[key].visualLine);
-            txLayer.removeLayer(_txElements[key].txM);
-            delete _txElements[key];
-        }
-    }
-}
 
     function updateAircraftMarkers(crossings){
         if(!mapInstance||!aircraftLayer) return;
         const activeIcaos=new Set();
 
-        // Initialize static caches on the function to store photos and prevent duplicate requests
         updateAircraftMarkers.photoCache = updateAircraftMarkers.photoCache || {};
         updateAircraftMarkers.fetching = updateAircraftMarkers.fetching || {};
 
@@ -2417,7 +2346,7 @@ function drawStaticLayers(crossings, rxLat, rxLon) {
                 t.txM.setIcon(txDotIcon('#00ee44', t.erp, t.isHighlighted));
             }
 
-            const photoHtml = updateAircraftMarkers.photoCache[ac.icao24] || '<div style="color:#889; font-size:10px; margin-top:6px; text-align:center;">📷 Loading photo...</div>';
+            const photoHtml = S.showPhotos ? (updateAircraftMarkers.photoCache[ac.icao24] || '<div style="color:#889; font-size:10px; margin-top:6px; text-align:center;">📷 Loading photo...</div>') : '';
 
             const ttHtml = `
                 <div class="as-ac-tooltip">
@@ -2435,33 +2364,33 @@ function drawStaticLayers(crossings, rxLat, rxLon) {
                     ${photoHtml}
                 </div>`;
 
-if(_drMarkers[ac.icao24]){
-    const entry = _drMarkers[ac.icao24];
-    const now = Date.now();
+            if(_drMarkers[ac.icao24]){
+                const entry = _drMarkers[ac.icao24];
+                const now = Date.now();
 
-    if (!entry._lastMoveUpdate) entry._lastMoveUpdate = 0;
+                if (!entry._lastMoveUpdate) entry._lastMoveUpdate = 0;
 
-    if (now - entry._lastMoveUpdate >= AIRCRAFT_MARKER_MIN_MOVE_MS) {
-        entry._lastMoveUpdate = now;
-        entry.marker.setLatLng([drLat,drLon]);
-        entry.label.setLatLng([drLat,drLon]);
-    }
+                if (now - entry._lastMoveUpdate >= AIRCRAFT_MARKER_MIN_MOVE_MS) {
+                    entry._lastMoveUpdate = now;
+                    entry.marker.setLatLng([drLat,drLon]);
+                    entry.label.setLatLng([drLat,drLon]);
+                }
 
-    entry.marker.setIcon(planeIcon(ac.track,renderColor,opacity,ac.category));
-    entry.marker.setTooltipContent(ttHtml);
+                entry.marker.setIcon(planeIcon(ac.track,renderColor,opacity,ac.category));
+                entry.marker.setTooltipContent(ttHtml);
 
-    const span = entry.label._icon?.querySelector('span');
-    if (span) {
-        span.textContent = fmtEta(liveEta);
-        span.className = 'as-countdown-cell ' + etaClass(liveEta);
-        span.parentElement.style.opacity = opacity;
-    }
-} else {
+                const span = entry.label._icon?.querySelector('span');
+                if (span) {
+                    span.textContent = fmtEta(liveEta);
+                    span.className = 'as-countdown-cell ' + etaClass(liveEta);
+                    span.parentElement.style.opacity = opacity;
+                }
+            } else {
                 const acM=L.marker([drLat,drLon],{icon:planeIcon(ac.track,renderColor,opacity,ac.category),zIndexOffset:500});
                 acM.bindTooltip(ttHtml, {direction: 'top', sticky: true, className: 'as-ac-tooltip-wrap', opacity: 1});
                 
-                // Fetch the photo only when the user actually hovers over this specific aircraft
                 acM.on('tooltipopen', () => {
+                    if (!S.showPhotos) return;
                     const icao = ac.icao24;
                     if (!updateAircraftMarkers.photoCache[icao] && !updateAircraftMarkers.fetching[icao]) {
                         updateAircraftMarkers.fetching[icao] = true;
@@ -2474,7 +2403,6 @@ if(_drMarkers[ac.icao24]){
                                 } else {
                                     updateAircraftMarkers.photoCache[icao] = '<div style="color:#889; font-size:10px; margin-top:6px; text-align:center;">No photo available</div>';
                                 }
-                                // The tooltip will automatically update on the next 1-second refresh tick
                             })
                             .catch(() => {
                                 updateAircraftMarkers.fetching[icao] = false;
@@ -2564,6 +2492,8 @@ if(_drMarkers[ac.icao24]){
                 el.dataset.txKey = tKey;
                 el.dataset.icao = icao;
                 
+                const photoDivHtml = S.showPhotos ? `<div class="as-li-photo" style="display:none; margin-top:8px; text-align:center; background:#0a0f18; padding:4px; border-radius:4px; border:1px solid #2a4a7a;"></div>` : '';
+                
                 el.innerHTML = `
                     <div class="as-li-content">
                         <div class="as-li-top">
@@ -2575,9 +2505,8 @@ if(_drMarkers[ac.icao24]){
                             <span class="as-li-eta ${etaClass_}">${fmtEta(cr.liveEta)}</span>
                         </div>
                     </div>
-                    <div class="as-li-photo" style="display:none; margin-top:8px; text-align:center; background:#0a0f18; padding:4px; border-radius:4px; border:1px solid #2a4a7a;"></div>`;
+                    ${photoDivHtml}`;
                 
-                // Add click listener to the entire element (so clicking the photo also works)
                 el.addEventListener('click', () => {
                     const txObj = Object.values(_persistentCrossings).flatMap(m=>Object.values(m)).find(c=>(c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq)===tKey)?.tx;
                     if(txObj) showTxDetails(tKey, txObj);
@@ -2587,36 +2516,42 @@ if(_drMarkers[ac.icao24]){
 
             const photoDiv = el.querySelector('.as-li-photo');
             if (photoDiv) {
-                el.onmouseenter = () => {
-                    photoDiv.style.display = 'block';
-                    if (!updateListPanel.photoCache[icao] && !updateListPanel.fetching[icao]) {
-                        updateListPanel.fetching[icao] = true;
-                        photoDiv.innerHTML = '<div style="color:#889; font-size:10px;">📷 Loading photo...</div>';
-                        
-                        fetch(`https://api.planespotters.net/pub/photos/hex/${icao}`)
-                            .then(r => r.json())
-                            .then(data => {
-                                if (data && data.photos && data.photos.length > 0) {
-                                    const photo = data.photos[0];
-                                    updateListPanel.photoCache[icao] = `<img src="${photo.thumbnail_large.src}" style="max-width:100%; border-radius:4px; display:block;"><div style="font-size:9px; color:#889; margin-top:2px;">© ${photo.photographer}</div>`;
-                                } else {
-                                    updateListPanel.photoCache[icao] = '<div style="color:#889; font-size:10px;">No photo available</div>';
-                                }
-                                photoDiv.innerHTML = updateListPanel.photoCache[icao];
-                            })
-                            .catch(() => {
-                                updateListPanel.fetching[icao] = false;
-                                updateListPanel.photoCache[icao] = '<div style="color:#f66; font-size:10px;">Photo load error</div>';
-                                photoDiv.innerHTML = updateListPanel.photoCache[icao];
-                            });
-                    } else if (updateListPanel.photoCache[icao]) {
-                        photoDiv.innerHTML = updateListPanel.photoCache[icao];
-                    }
-                };
-
-                el.onmouseleave = () => {
+                if (!S.showPhotos) {
+                    el.onmouseenter = null;
+                    el.onmouseleave = null;
                     photoDiv.style.display = 'none';
-                };
+                } else {
+                    el.onmouseenter = () => {
+                        photoDiv.style.display = 'block';
+                        if (!updateListPanel.photoCache[icao] && !updateListPanel.fetching[icao]) {
+                            updateListPanel.fetching[icao] = true;
+                            photoDiv.innerHTML = '<div style="color:#889; font-size:10px;">📷 Loading photo...</div>';
+                            
+                            fetch(`https://api.planespotters.net/pub/photos/hex/${icao}`)
+                                .then(r => r.json())
+                                .then(data => {
+                                    if (data && data.photos && data.photos.length > 0) {
+                                        const photo = data.photos[0];
+                                        updateListPanel.photoCache[icao] = `<img src="${photo.thumbnail_large.src}" style="max-width:100%; border-radius:4px; display:block;"><div style="font-size:9px; color:#889; margin-top:2px;">© ${photo.photographer}</div>`;
+                                    } else {
+                                        updateListPanel.photoCache[icao] = '<div style="color:#889; font-size:10px;">No photo available</div>';
+                                    }
+                                    photoDiv.innerHTML = updateListPanel.photoCache[icao];
+                                })
+                                .catch(() => {
+                                    updateListPanel.fetching[icao] = false;
+                                    updateListPanel.photoCache[icao] = '<div style="color:#f66; font-size:10px;">Photo load error</div>';
+                                    photoDiv.innerHTML = updateListPanel.photoCache[icao];
+                                });
+                        } else if (updateListPanel.photoCache[icao]) {
+                            photoDiv.innerHTML = updateListPanel.photoCache[icao];
+                        }
+                    };
+
+                    el.onmouseleave = () => {
+                        photoDiv.style.display = 'none';
+                    };
+                }
             }
         });
 
@@ -2632,450 +2567,434 @@ if(_drMarkers[ac.icao24]){
         if (oldTt) oldTt.remove();
     }
 
-async function showTxDetails(txKey, tx) {
-    document.getElementById('as-list-header').style.display = 'none';
-    document.getElementById('as-list-body').style.display = 'none';
+    async function showTxDetails(txKey, tx) {
+        document.getElementById('as-list-header').style.display = 'none';
+        document.getElementById('as-list-body').style.display = 'none';
 
-    // Remove any existing beam funnel when a NEW station is clicked
-    if (window._asBeamLayers && mapInstance) {
-        mapInstance.removeLayer(window._asBeamLayers);
-        window._asBeamLayers = null;
-    }
-
-    // Close all currently open fmscan info rows
-    document.querySelectorAll('.fmscan-info-row').forEach(row => row.remove());
-    document.querySelectorAll('.as-stream-btn.fa-info-circle').forEach(icon => {
-        icon.style.color = '#4aaeff';
-    });
-
-    const dp = document.getElementById('as-tx-detail-panel');
-    dp.style.display = 'flex';
-    renderTxDetailsContent(txKey, tx);
-
-    const rx = getRxCoords();
-    if (rx) {
-        _activeProfileTxKey = txKey;
-        _activeProfileTxObj = tx;
-        profMinX = 0;
-        profMaxX = 0;
-        document.getElementById('as-profile-panel').style.display = 'flex';
-        resizeProfileCanvas();
-    }
-
-    // ── Store the selected TX object persistently so the dot stays visible
-    // even after all crossing aircraft have left the trail window.
-    _activeTxKey = txKey;
-    _activeTxObj = tx;   // <-- new: keep a direct reference
-
-    if (rx && mapInstance) {
-        mapInstance.invalidateSize();
-        const bounds = L.latLngBounds([[rx.lat, rx.lon], [tx.lat, tx.lon]]);
-        const allCrs = getActiveVisibleCrossings().filter(c => (c.tx.lat + '_' + c.tx.lon + '_' + c.tx.freq) === txKey);
-        allCrs.forEach(cr => {
-            let drLat = cr.ac.lat, drLon = cr.ac.lon;
-            if (cr.ac.track !== null && cr.ac.speed > 0) {
-                const p = deadReckon(cr.ac.lat, cr.ac.lon, cr.ac.track, cr.ac.speed, cr.elapsed);
-                drLat = p.lat; drLon = p.lon;
-            }
-            bounds.extend([drLat, drLon]);
-        });
-        setTimeout(() => mapInstance.fitBounds(bounds, { padding: [50, 50], maxZoom: 10 }), 50);
-        _currentPathElevs = await fetchPathElevation(rx.lat, rx.lon, tx.lat, tx.lon, txKey);
-
-        // Invalidate the envelope cache for THIS tx so _evalScatterAt
-        // immediately picks up the high-res path elevations
-        _txEnvelopeCache.delete(txKey);
-
-        redrawActiveProfile();
-        redrawFiltered();
-
-        // ── Auto-open the first sibling that has beam data ────────────────
-        const siblings = txSiblings(tx);
-
-        // Find the first sibling with beam data (from userlist or tx.beam)
-        const siblingsWithBeam = siblings.filter(s => {
-            if (s.beam) return true;
-            if (!s.id) return false;
-            const entry = getUserlistEntry(s);
-            return entry && entry.beam && entry.beam.trim() !== '';
-        });
-
-        const primarySibling = siblingsWithBeam.length > 0
-            ? siblingsWithBeam[0]
-            : siblings.find(s => s.id); // fallback: any sibling with id
-
-        if (primarySibling) {
-            // Wait briefly for the DOM to render the detail panel rows
-            setTimeout(() => {
-                const selector = primarySibling.id
-                    ? `#as-tx-detail-body .as-stream-btn.fa-info-circle[onclick*="_asFetchFmscan(${primarySibling.id},"]`
-                    : null;
-                const infoIcon = selector ? document.querySelector(selector) : null;
-                if (infoIcon) {
-                    window._asFetchFmscan(primarySibling.id, infoIcon, tx.lat, tx.lon, primarySibling.erp);
-                } else if (primarySibling.id) {
-                    window._asFetchFmscan(primarySibling.id, null, tx.lat, tx.lon, primarySibling.erp);
-                }
-            }, 50);
-        }
-    }
-}
-	
-function hideTxDetails() {
-    document.getElementById('as-tx-detail-panel').style.display = 'none';
-    document.getElementById('as-list-header').style.display = 'flex';
-    document.getElementById('as-list-body').style.display = 'block';
-    document.getElementById('as-profile-panel').style.display = 'none';
-
-    _activeProfileTxKey = null; _activeProfileTxObj = null;
-    _activeTxKey = null;
-    _activeTxObj = null;   // <-- clear the persistent TX reference
-    updateCompassUI();
-
-    if (window._asBeamLayers && mapInstance) {
-        mapInstance.removeLayer(window._asBeamLayers);
-        window._asBeamLayers = null;
-    }
-
-    if(mapInstance) mapInstance.invalidateSize();
-    redrawFiltered();
-}
-	
-    // ── Local CSV Data Fetcher (Replaces FMSCAN) ──────────────────────────
-window._asFetchFmscan = async function(id, el, txLat, txLon, txErp) {
-    const tr = el ? el.closest('tr') : null;
-    let infoRow = tr ? tr.nextElementSibling : null;
-
-    // Toggle (Close if already open) — only when triggered by a real icon click
-    if (el && infoRow && infoRow.classList.contains('fmscan-info-row')) {
-        infoRow.remove();
-        el.style.color = '#4aaeff';
-
-        // Remove beam from map when the info panel is closed
         if (window._asBeamLayers && mapInstance) {
             mapInstance.removeLayer(window._asBeamLayers);
             window._asBeamLayers = null;
         }
-        return;
-    }
 
-    // ── Close any other open fmscan info rows before opening a new one ──
-    document.querySelectorAll('.fmscan-info-row').forEach(row => {
-        const parentTr = row.previousElementSibling;
-        if (parentTr) {
-            const otherIcon = parentTr.querySelector('.as-stream-btn.fa-info-circle');
-            if (otherIcon && otherIcon !== el) {
-                otherIcon.style.color = '#4aaeff';
-                row.remove();
+        document.querySelectorAll('.fmscan-info-row').forEach(row => row.remove());
+        document.querySelectorAll('.as-stream-btn.fa-info-circle').forEach(icon => {
+            icon.style.color = '#4aaeff';
+        });
+
+        const dp = document.getElementById('as-tx-detail-panel');
+        dp.style.display = 'flex';
+        renderTxDetailsContent(txKey, tx);
+
+        const rx = getRxCoords();
+        if (rx) {
+            _activeProfileTxKey = txKey;
+            _activeProfileTxObj = tx;
+            profMinX = 0;
+            profMaxX = 0;
+            document.getElementById('as-profile-panel').style.display = 'flex';
+            resizeProfileCanvas();
+        }
+
+        _activeTxKey = txKey;
+        _activeTxObj = tx;   
+
+        if (rx && mapInstance) {
+            mapInstance.invalidateSize();
+            const bounds = L.latLngBounds([[rx.lat, rx.lon], [tx.lat, tx.lon]]);
+            const allCrs = getActiveVisibleCrossings().filter(c => (c.tx.lat + '_' + c.tx.lon + '_' + c.tx.freq) === txKey);
+            allCrs.forEach(cr => {
+                let drLat = cr.ac.lat, drLon = cr.ac.lon;
+                if (cr.ac.track !== null && cr.ac.speed > 0) {
+                    const p = deadReckon(cr.ac.lat, cr.ac.lon, cr.ac.track, cr.ac.speed, cr.elapsed);
+                    drLat = p.lat; drLon = p.lon;
+                }
+                bounds.extend([drLat, drLon]);
+            });
+            setTimeout(() => mapInstance.fitBounds(bounds, { padding: [50, 50], maxZoom: 10 }), 50);
+            _currentPathElevs = await fetchPathElevation(rx.lat, rx.lon, tx.lat, tx.lon, txKey);
+
+            _txEnvelopeCache.delete(txKey);
+
+            redrawActiveProfile();
+            redrawFiltered();
+
+            const siblings = txSiblings(tx);
+
+            const siblingsWithBeam = siblings.filter(s => {
+                if (s.beam) return true;
+                if (!s.id) return false;
+                const entry = getUserlistEntry(s);
+                return entry && entry.beam && entry.beam.trim() !== '';
+            });
+
+            const primarySibling = siblingsWithBeam.length > 0
+                ? siblingsWithBeam[0]
+                : siblings.find(s => s.id); 
+
+            if (primarySibling) {
+                setTimeout(() => {
+                    const selector = primarySibling.id
+                        ? `#as-tx-detail-body .as-stream-btn.fa-info-circle[onclick*="_asFetchFmscan(${primarySibling.id},"]`
+                        : null;
+                    const infoIcon = selector ? document.querySelector(selector) : null;
+                    if (infoIcon) {
+                        window._asFetchFmscan(primarySibling.id, infoIcon, tx.lat, tx.lon, primarySibling.erp);
+                    } else if (primarySibling.id) {
+                        window._asFetchFmscan(primarySibling.id, null, tx.lat, tx.lon, primarySibling.erp);
+                    }
+                }, 50);
             }
         }
-    });
-    if (window._asBeamLayers && mapInstance) {
-        mapInstance.removeLayer(window._asBeamLayers);
-        window._asBeamLayers = null;
     }
+        
+    function hideTxDetails() {
+        document.getElementById('as-tx-detail-panel').style.display = 'none';
+        document.getElementById('as-list-header').style.display = 'flex';
+        document.getElementById('as-list-body').style.display = 'block';
+        document.getElementById('as-profile-panel').style.display = 'none';
 
-    if (el) {
-        el.style.color = '#fff';
-        el.className = 'fas fa-spinner fa-spin as-stream-btn'; // Loading icon
+        _activeProfileTxKey = null; _activeProfileTxObj = null;
+        _activeTxKey = null;
+        _activeTxObj = null;   
+        updateCompassUI();
+
+        if (window._asBeamLayers && mapInstance) {
+            mapInstance.removeLayer(window._asBeamLayers);
+            window._asBeamLayers = null;
+        }
+
+        if(mapInstance) mapInstance.invalidateSize();
+        redrawFiltered();
     }
+        
+    // ── Local CSV Data Fetcher (Replaces FMSCAN) ──────────────────────────
+    window._asFetchFmscan = async function(id, el, txLat, txLon, txErp) {
+        const tr = el ? el.closest('tr') : null;
+        let infoRow = tr ? tr.nextElementSibling : null;
 
-    try {
-        // Fetch local CSV
-        const url = `${currentURL.protocol}//${currentURL.host}/plugins/AirplaneScatter/userlist1.csv?t=${Date.now()}`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error('Local CSV fetch failed');
+        if (el && infoRow && infoRow.classList.contains('fmscan-info-row')) {
+            infoRow.remove();
+            el.style.color = '#4aaeff';
 
-        const text = await res.text();
-        const lines = text.split('\n');
-        let foundLine = null;
+            if (window._asBeamLayers && mapInstance) {
+                mapInstance.removeLayer(window._asBeamLayers);
+                window._asBeamLayers = null;
+            }
+            return;
+        }
 
-        for (let i = 0; i < lines.length; i++) {
-            const parts = lines[i].trim().split(';');
-            if (parts.length > 10) {
-                const lineId = parts[parts.length - 1].trim();
-                if (lineId === String(id).trim()) {
-                    foundLine = parts;
-                    break;
+        document.querySelectorAll('.fmscan-info-row').forEach(row => {
+            const parentTr = row.previousElementSibling;
+            if (parentTr) {
+                const otherIcon = parentTr.querySelector('.as-stream-btn.fa-info-circle');
+                if (otherIcon && otherIcon !== el) {
+                    otherIcon.style.color = '#4aaeff';
+                    row.remove();
                 }
             }
+        });
+        if (window._asBeamLayers && mapInstance) {
+            mapInstance.removeLayer(window._asBeamLayers);
+            window._asBeamLayers = null;
         }
 
-        if (!foundLine) throw new Error('Transmitter ID not found in CSV');
+        if (el) {
+            el.style.color = '#fff';
+            el.className = 'fas fa-spinner fa-spin as-stream-btn'; 
+        }
 
-        // Format data from CSV columns
-        const data = {};
-        if (foundLine[1])  data['Country']    = foundLine[1];
-        if (foundLine[2])  data['Language']   = foundLine[2];
-        if (foundLine[4])  data['Modulation'] = foundLine[4];
-        if (foundLine[10]) data['Main Beam']  = foundLine[10];
-        if (foundLine[14]) data['RDS-PS']     = foundLine[14];
-        if (foundLine[15]) data['RDS-PI']     = foundLine[15];
+        try {
+            const url = `${currentURL.protocol}//${currentURL.host}/plugins/AirplaneScatter/userlist1.csv?t=${Date.now()}`;
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('Local CSV fetch failed');
 
-        // Draw beam on the map if "Main Beam" data exists
-        if (foundLine[10] && mapInstance) {
-            const rawBeamStr = foundLine[10];
-            window._asBeamLayers = L.featureGroup().addTo(mapInstance);
-            const radiusKm = Math.min(450, Math.max(40, Math.sqrt(txErp) * 15));
+            const text = await res.text();
+            const lines = text.split('\n');
+            let foundLine = null;
 
-            // Alle Sektoren finden
-            const ranges = [...rawBeamStr.matchAll(/(\d+)\s*-\s*(\d+)/g)];
-
-            if (ranges.length > 0) {
-                ranges.forEach(match => {
-                    const startAngle = parseInt(match[1], 10);
-                    const endAngle   = parseInt(match[2], 10);
-
-                    let sweep = endAngle - startAngle;
-                    if (sweep < 0) sweep += 360;
-
-                    const pts = [[txLat, txLon]]; // Tower origin
-
-                    for (let i = 0; i <= sweep; i += 5) {
-                        const angle = (startAngle + i) % 360;
-                        const p = deadReckonRad(txLat, txLon, angle, radiusKm);
-                        pts.push([p.lat, p.lon]);
+            for (let i = 0; i < lines.length; i++) {
+                const parts = lines[i].trim().split(';');
+                if (parts.length > 10) {
+                    const lineId = parts[parts.length - 1].trim();
+                    if (lineId === String(id).trim()) {
+                        foundLine = parts;
+                        break;
                     }
+                }
+            }
 
-                    const pEnd = deadReckonRad(txLat, txLon, endAngle, radiusKm);
-                    pts.push([pEnd.lat, pEnd.lon]);
+            if (!foundLine) throw new Error('Transmitter ID not found in CSV');
 
-                    L.polygon(pts, {
-                        color: '#ffcc00', weight: 1.5, opacity: 0.65,
-                        fillColor: '#ffaa00', fillOpacity: 0.25, interactive: false
-                    }).addTo(window._asBeamLayers);
-                });
-            } else {
-                // Fallback: single values (e.g., "45, 135", "030/290", or just "90")
-                const beams = rawBeamStr.match(/\d+/g);
-                if (beams) {
-                    const beamwidth = 60; // Fixed width: ±30° around the specified direction
-                    beams.forEach(bStr => {
-                        const bDeg = parseInt(bStr, 10);
-                        const pts  = [[txLat, txLon]];
+            const data = {};
+            if (foundLine[1])  data['Country']    = foundLine[1];
+            if (foundLine[2])  data['Language']   = foundLine[2];
+            if (foundLine[4])  data['Modulation'] = foundLine[4];
+            if (foundLine[10]) data['Main Beam']  = foundLine[10];
+            if (foundLine[14]) data['RDS-PS']     = foundLine[14];
+            if (foundLine[15]) data['RDS-PI']     = foundLine[15];
 
-                        // Calculate polygon points from (direction - 30°) to (direction + 30°) in 5° steps
-                        for (let angle = bDeg - (beamwidth / 2); angle <= bDeg + (beamwidth / 2); angle += 5) {
+            if (foundLine[10] && mapInstance) {
+                const rawBeamStr = foundLine[10];
+                window._asBeamLayers = L.featureGroup().addTo(mapInstance);
+                const radiusKm = Math.min(450, Math.max(40, Math.sqrt(txErp) * 15));
+
+                const ranges = [...rawBeamStr.matchAll(/(\d+)\s*-\s*(\d+)/g)];
+
+                if (ranges.length > 0) {
+                    ranges.forEach(match => {
+                        const startAngle = parseInt(match[1], 10);
+                        const endAngle   = parseInt(match[2], 10);
+
+                        let sweep = endAngle - startAngle;
+                        if (sweep < 0) sweep += 360;
+
+                        const pts = [[txLat, txLon]]; 
+
+                        for (let i = 0; i <= sweep; i += 5) {
+                            const angle = (startAngle + i) % 360;
                             const p = deadReckonRad(txLat, txLon, angle, radiusKm);
                             pts.push([p.lat, p.lon]);
                         }
 
-                        // Draws the "pie slice" on the map
+                        const pEnd = deadReckonRad(txLat, txLon, endAngle, radiusKm);
+                        pts.push([pEnd.lat, pEnd.lon]);
+
                         L.polygon(pts, {
                             color: '#ffcc00', weight: 1.5, opacity: 0.65,
                             fillColor: '#ffaa00', fillOpacity: 0.25, interactive: false
                         }).addTo(window._asBeamLayers);
                     });
-                }
-            }
-        }
+                } else {
+                    const beams = rawBeamStr.match(/\d+/g);
+                    if (beams) {
+                        const beamwidth = 60; 
+                        beams.forEach(bStr => {
+                            const bDeg = parseInt(bStr, 10);
+                            const pts  = [[txLat, txLon]];
 
-        // Build the expandable detail row (only when triggered from a real icon click)
-        if (el && tr) {
-            let detailsHtml = '';
-            for (const [key, value] of Object.entries(data)) {
-                let displayValue = value;
-                if (key === 'Main Beam') displayValue += '°';
-                detailsHtml += `<div><b style="color:#9bb;">${key}:</b> <span style="color:#fff;">${displayValue}</span></div>`;
-            }
-
-            if (detailsHtml === '') {
-                detailsHtml = '<div style="color:#889; grid-column: span 2; text-align:center;">No additional details available.</div>';
-            }
-
-            infoRow = document.createElement('tr');
-            infoRow.className = 'fmscan-info-row';
-            infoRow.innerHTML = `
-                <td colspan="5" style="padding: 10px; background: #0a0f18; border-bottom: 1px solid #1e3050; border-top: 1px dashed #2a4a7a;">
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size:11px; line-height:1.4;">
-                        ${detailsHtml}
-                    </div>
-                </td>`;
-            tr.parentNode.insertBefore(infoRow, tr.nextSibling);
-
-            el.className = 'fas fa-info-circle as-stream-btn';
-            el.style.color = '#00ee44';
-        }
-
-    } catch (err) {
-        console.warn('[Airplane Scatter] CSV parse error:', err);
-        if (el) {
-            el.className = 'fas fa-info-circle as-stream-btn';
-            el.style.color = '#f66';
-        }
-        if (typeof sendToast === 'function')
-            sendToast('error', 'TX Info', 'Failed to load transmitter details from CSV.', false, false);
-    }
-};
-
-function renderTxDetailsContent(txKey, tx) {
-    const bd = document.getElementById('as-tx-detail-body');
-    if(!bd) return;
-
-    renderTxDetailsContent.photoCache = renderTxDetailsContent.photoCache || {};
-    renderTxDetailsContent.fetching = renderTxDetailsContent.fetching || {};
-
-    const rx = getRxCoords();
-    const allCrs = getActiveVisibleCrossings().filter(c => (c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq) === txKey);
-    allCrs.sort((a,b) => Math.abs(a.liveEta) - Math.abs(b.liveEta));
-
-    if (!bd.dataset.txKey || bd.dataset.txKey !== txKey || bd.dataset.filterMode !== S.filterMode) {
-        bd.dataset.txKey = txKey;
-        bd.dataset.filterMode = S.filterMode;
-
-        const siblings = txSiblings(tx);
-        const progsRows = siblings.map(t => {
-            const progName = t.station || t.ps || '?';
-            const tuneCmd = `T${Math.round(t.freq * 1000)}`;
-
-            let playIconHtml = '';
-            let infoIconHtml = '';
-
-            if (t.id) {
-                const isPlaying = (asCurrentStreamId === t.id);
-                const iconClass = isPlaying ? 'fa-square' : 'fa-play';
-                const iconColor = isPlaying ? '#fff' : '#4aaeff';
-                playIconHtml = `<i class="fas ${iconClass} as-stream-btn" style="color:${iconColor}; cursor:pointer;" title="Play Livestream" onclick="window._asHandleStreamClick('${t.id}', '${progName.replace(/'/g, "\\'")}', this)" onmouseover="if(this.classList.contains('fa-play')) this.style.color='#fff'" onmouseout="if(this.classList.contains('fa-play')) this.style.color='#4aaeff'"></i>`;
-
-                if (_userlistLoaded) {
-                    infoIconHtml = `<i class="fas fa-info-circle as-stream-btn" style="color:#4aaeff; cursor:pointer; margin-left:6px;" title="Load transmitter details" onclick="window._asFetchFmscan(${t.id}, this, ${t.lat}, ${t.lon}, ${t.erp})"></i>`;
-                }
-            }
-
-            return `
-            <tr>
-                <td style="width:40px; text-align:center; padding-right:8px; white-space:nowrap;">
-                    ${playIconHtml}
-                    ${infoIconHtml}
-                </td>
-                <td style="color:#4aaeff; white-space:nowrap; cursor:pointer; padding-right:8px;"
-                    title="Click to tune"
-                    onmouseover="this.style.textDecoration='underline'; this.style.color='#fff';"
-                    onmouseout="this.style.textDecoration='none'; this.style.color='#4aaeff';"
-                    onclick="if(typeof socket !== 'undefined' && socket.readyState === 1) { socket.send('${tuneCmd}'); } else { alert('WebSocket is not connected'); }">
-                    ${t.freq.toFixed(2)} MHz
-                </td>
-                <td style="color:#fff; width:100%; max-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${progName}">${progName}</td>
-                <td style="color:#889; text-align:center; padding:0 8px;">${t.pol||'—'}</td>
-                <td style="color:#cde; text-align:right; white-space:nowrap;">${t.erp} kW</td>
-            </tr>`;
-        }).join('');
-
-        const flagHtml = getFlagImg(tx.itu, 20, 15);
-
-        let azHtml = '—';
-        if (rx) {
-            const az = Math.round(bearingDeg(rx.lat, rx.lon, tx.lat, tx.lon));
-            const canTurnRotor = (isAdminLoggedIn || isTuneLoggedIn) && lastRotorAzimuth !== null;
-            if (canTurnRotor) {
-                azHtml = `<span style="color:#4aaeff; cursor:pointer;"
-                                title="Click to turn Rotor to ${az}°"
-                                onmouseover="this.style.textDecoration='underline'; this.style.color='#fff';"
-                                onmouseout="this.style.textDecoration='none'; this.style.color='#4aaeff';"
-                                onclick="if(window._asSendRotorPosition) window._asSendRotorPosition(${az});">
-                          ${az}°</span>`;
-            } else {
-                azHtml = `${az}°`;
-            }
-        }
-
-        bd.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <div style="font-size:13px; font-weight:bold; color:#fff;">${tx.city} [${tx.itu}]</div>
-                ${flagHtml ? `<div>${flagHtml}</div>` : ''}
-            </div>
-            <table class="tx-info-table">
-                <tr><td>Distance</td><td>${tx.dist} km</td></tr>
-                <tr><td>Azimuth</td><td>${azHtml}</td></tr>
-                <tr><td>Terrain</td><td>${tx.terrainM||0} m</td></tr>
-            </table>
-            <div style="margin-bottom:10px; background:#162032; padding:4px 6px; border-radius:4px;">
-                <table class="tx-freq-table">${progsRows}</table>
-            </div>
-            <div style="color:#889; font-size:11px; margin-bottom:4px; border-bottom:1px solid #2a4a7a; padding-bottom:2px;">Crossing Aircraft</div>
-            <div id="as-tx-ac-list"></div>`;
-
-        if (window._asBeamLayers && mapInstance) {
-            mapInstance.removeLayer(window._asBeamLayers);
-            window._asBeamLayers = null;
-        }
-    }
-
-    const acListEl = document.getElementById('as-tx-ac-list');
-    if (!acListEl) return;
-
-    if (allCrs.length === 0) {
-        const empty = '<div style="color:#668;font-size:11px;">No aircraft in window.</div>';
-        if (acListEl.innerHTML !== empty) acListEl.innerHTML = empty;
-        return;
-    }
-
-    const activeIcaos = new Set(allCrs.map(c => c.ac.icao24));
-    acListEl.querySelectorAll('[data-icao]').forEach(el => {
-        if (!activeIcaos.has(el.dataset.icao)) el.remove();
-    });
-
-    allCrs.forEach((c, idx) => {
-        const icao = c.ac.icao24;
-        let row = acListEl.querySelector(`[data-icao="${icao}"]`);
-        const etaHtml = `<span style="color:${scoreColor(c.score)}; margin-right:6px; font-weight:bold;">${c.score}%</span><span class="as-countdown-cell ${etaClass(c.liveEta)}">${fmtEta(c.liveEta)}</span>`;
-        
-        const typeStr = c.ac.type ? ' ' + c.ac.type : '';
-        const catStr = c.ac.category ? ' [' + c.ac.category + ']' : '';
-        const acDetails = typeStr || catStr ? `<span style="color:#889;font-weight:normal;font-size:10px;margin-left:4px;">${typeStr}${catStr}</span>` : '';
-        const nameHtml = `✈ ${c.ac.callsign || c.ac.icao24}${acDetails}`;
-
-        if (!row) {
-            row = document.createElement('div');
-            row.className = 'tx-ac-row';
-            row.style.flexDirection = 'column';
-            row.style.alignItems = 'stretch';
-            row.dataset.icao = icao;
-            
-            row.innerHTML = `
-                <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
-                    <span style="color:#fff;">${nameHtml}</span>
-                    <span class="as-tx-eta-cell">${etaHtml}</span>
-                </div>
-                <div class="as-tx-photo" style="margin-top:6px; text-align:center; background:#0a0f18; padding:4px; border-radius:4px; border:1px solid #2a4a7a;"></div>
-            `;
-            
-            const rows = acListEl.querySelectorAll('[data-icao]');
-            if (idx < rows.length) acListEl.insertBefore(row, rows[idx]);
-            else acListEl.appendChild(row);
-
-            const photoDiv = row.querySelector('.as-tx-photo');
-            if (photoDiv) {
-                if (!renderTxDetailsContent.photoCache[icao] && !renderTxDetailsContent.fetching[icao]) {
-                    renderTxDetailsContent.fetching[icao] = true;
-                    photoDiv.innerHTML = '<div style="color:#889; font-size:10px;">📷 Loading photo...</div>';
-                    
-                    fetch(`https://api.planespotters.net/pub/photos/hex/${icao}`)
-                        .then(r => r.json())
-                        .then(data => {
-                            if (data && data.photos && data.photos.length > 0) {
-                                const photo = data.photos[0];
-                                renderTxDetailsContent.photoCache[icao] = `<img src="${photo.thumbnail_large.src}" style="max-width:100%; border-radius:4px; display:block;"><div style="font-size:9px; color:#889; margin-top:2px;">© ${photo.photographer}</div>`;
-                            } else {
-                                renderTxDetailsContent.photoCache[icao] = '<div style="color:#889; font-size:10px;">No photo available</div>';
+                            for (let angle = bDeg - (beamwidth / 2); angle <= bDeg + (beamwidth / 2); angle += 5) {
+                                const p = deadReckonRad(txLat, txLon, angle, radiusKm);
+                                pts.push([p.lat, p.lon]);
                             }
-                            photoDiv.innerHTML = renderTxDetailsContent.photoCache[icao];
-                        })
-                        .catch(() => {
-                            renderTxDetailsContent.fetching[icao] = false;
-                            renderTxDetailsContent.photoCache[icao] = '<div style="color:#f66; font-size:10px;">Photo load error</div>';
-                            photoDiv.innerHTML = renderTxDetailsContent.photoCache[icao];
+
+                            L.polygon(pts, {
+                                color: '#ffcc00', weight: 1.5, opacity: 0.65,
+                                fillColor: '#ffaa00', fillOpacity: 0.25, interactive: false
+                            }).addTo(window._asBeamLayers);
                         });
-                } else if (renderTxDetailsContent.photoCache[icao]) {
-                    photoDiv.innerHTML = renderTxDetailsContent.photoCache[icao];
+                    }
                 }
             }
-        } else {
-            const etaCell = row.querySelector('.as-tx-eta-cell');
-            if (etaCell) etaCell.innerHTML = etaHtml;
+
+            if (el && tr) {
+                let detailsHtml = '';
+                for (const [key, value] of Object.entries(data)) {
+                    let displayValue = value;
+                    if (key === 'Main Beam') displayValue += '°';
+                    detailsHtml += `<div><b style="color:#9bb;">${key}:</b> <span style="color:#fff;">${displayValue}</span></div>`;
+                }
+
+                if (detailsHtml === '') {
+                    detailsHtml = '<div style="color:#889; grid-column: span 2; text-align:center;">No additional details available.</div>';
+                }
+
+                infoRow = document.createElement('tr');
+                infoRow.className = 'fmscan-info-row';
+                infoRow.innerHTML = `
+                    <td colspan="5" style="padding: 10px; background: #0a0f18; border-bottom: 1px solid #1e3050; border-top: 1px dashed #2a4a7a;">
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size:11px; line-height:1.4;">
+                            ${detailsHtml}
+                        </div>
+                    </td>`;
+                tr.parentNode.insertBefore(infoRow, tr.nextSibling);
+
+                el.className = 'fas fa-info-circle as-stream-btn';
+                el.style.color = '#00ee44';
+            }
+
+        } catch (err) {
+            console.warn('[Airplane Scatter] CSV parse error:', err);
+            if (el) {
+                el.className = 'fas fa-info-circle as-stream-btn';
+                el.style.color = '#f66';
+            }
+            if (typeof sendToast === 'function')
+                sendToast('error', 'TX Info', 'Failed to load transmitter details from CSV.', false, false);
         }
-    });
-}
+    };
+
+    function renderTxDetailsContent(txKey, tx) {
+        const bd = document.getElementById('as-tx-detail-body');
+        if(!bd) return;
+
+        renderTxDetailsContent.photoCache = renderTxDetailsContent.photoCache || {};
+        renderTxDetailsContent.fetching = renderTxDetailsContent.fetching || {};
+
+        const rx = getRxCoords();
+        const allCrs = getActiveVisibleCrossings().filter(c => (c.tx.lat+'_'+c.tx.lon+'_'+c.tx.freq) === txKey);
+        allCrs.sort((a,b) => Math.abs(a.liveEta) - Math.abs(b.liveEta));
+
+        if (!bd.dataset.txKey || bd.dataset.txKey !== txKey || bd.dataset.filterMode !== S.filterMode) {
+            bd.dataset.txKey = txKey;
+            bd.dataset.filterMode = S.filterMode;
+
+            const siblings = txSiblings(tx);
+            const progsRows = siblings.map(t => {
+                const progName = t.station || t.ps || '?';
+                const tuneCmd = `T${Math.round(t.freq * 1000)}`;
+
+                let playIconHtml = '';
+                let infoIconHtml = '';
+
+                if (t.id) {
+                    const isPlaying = (asCurrentStreamId === t.id);
+                    const iconClass = isPlaying ? 'fa-square' : 'fa-play';
+                    const iconColor = isPlaying ? '#fff' : '#4aaeff';
+                    playIconHtml = `<i class="fas ${iconClass} as-stream-btn" style="color:${iconColor}; cursor:pointer;" title="Play Livestream" onclick="window._asHandleStreamClick('${t.id}', '${progName.replace(/'/g, "\\'")}', this)" onmouseover="if(this.classList.contains('fa-play')) this.style.color='#fff'" onmouseout="if(this.classList.contains('fa-play')) this.style.color='#4aaeff'"></i>`;
+
+                    if (_userlistLoaded) {
+                        infoIconHtml = `<i class="fas fa-info-circle as-stream-btn" style="color:#4aaeff; cursor:pointer; margin-left:6px;" title="Load transmitter details" onclick="window._asFetchFmscan(${t.id}, this, ${t.lat}, ${t.lon}, ${t.erp})"></i>`;
+                    }
+                }
+
+                return `
+                <tr>
+                    <td style="width:40px; text-align:center; padding-right:8px; white-space:nowrap;">
+                        ${playIconHtml}
+                        ${infoIconHtml}
+                    </td>
+                    <td style="color:#4aaeff; white-space:nowrap; cursor:pointer; padding-right:8px;"
+                        title="Click to tune"
+                        onmouseover="this.style.textDecoration='underline'; this.style.color='#fff';"
+                        onmouseout="this.style.textDecoration='none'; this.style.color='#4aaeff';"
+                        onclick="if(typeof socket !== 'undefined' && socket.readyState === 1) { socket.send('${tuneCmd}'); } else { alert('WebSocket is not connected'); }">
+                        ${t.freq.toFixed(2)} MHz
+                    </td>
+                    <td style="color:#fff; width:100%; max-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${progName}">${progName}</td>
+                    <td style="color:#889; text-align:center; padding:0 8px;">${t.pol||'—'}</td>
+                    <td style="color:#cde; text-align:right; white-space:nowrap;">${t.erp} kW</td>
+                </tr>`;
+            }).join('');
+
+            const flagHtml = getFlagImg(tx.itu, 20, 15);
+
+            let azHtml = '—';
+            if (rx) {
+                const az = Math.round(bearingDeg(rx.lat, rx.lon, tx.lat, tx.lon));
+                const canTurnRotor = (isAdminLoggedIn || isTuneLoggedIn) && lastRotorAzimuth !== null;
+                if (canTurnRotor) {
+                    azHtml = `<span style="color:#4aaeff; cursor:pointer;"
+                                    title="Click to turn Rotor to ${az}°"
+                                    onmouseover="this.style.textDecoration='underline'; this.style.color='#fff';"
+                                    onmouseout="this.style.textDecoration='none'; this.style.color='#4aaeff';"
+                                    onclick="if(window._asSendRotorPosition) window._asSendRotorPosition(${az});">
+                              ${az}°</span>`;
+                } else {
+                    azHtml = `${az}°`;
+                }
+            }
+
+            bd.innerHTML = `
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <div style="font-size:13px; font-weight:bold; color:#fff;">${tx.city} [${tx.itu}]</div>
+                    ${flagHtml ? `<div>${flagHtml}</div>` : ''}
+                </div>
+                <table class="tx-info-table">
+                    <tr><td>Distance</td><td>${tx.dist} km</td></tr>
+                    <tr><td>Azimuth</td><td>${azHtml}</td></tr>
+                    <tr><td>Terrain</td><td>${tx.terrainM||0} m</td></tr>
+                </table>
+                <div style="margin-bottom:10px; background:#162032; padding:4px 6px; border-radius:4px;">
+                    <table class="tx-freq-table">${progsRows}</table>
+                </div>
+                <div style="color:#889; font-size:11px; margin-bottom:4px; border-bottom:1px solid #2a4a7a; padding-bottom:2px;">Crossing Aircraft</div>
+                <div id="as-tx-ac-list"></div>`;
+
+            if (window._asBeamLayers && mapInstance) {
+                mapInstance.removeLayer(window._asBeamLayers);
+                window._asBeamLayers = null;
+            }
+        }
+
+        const acListEl = document.getElementById('as-tx-ac-list');
+        if (!acListEl) return;
+
+        if (allCrs.length === 0) {
+            const empty = '<div style="color:#668;font-size:11px;">No aircraft in window.</div>';
+            if (acListEl.innerHTML !== empty) acListEl.innerHTML = empty;
+            return;
+        }
+
+        const activeIcaos = new Set(allCrs.map(c => c.ac.icao24));
+        acListEl.querySelectorAll('[data-icao]').forEach(el => {
+            if (!activeIcaos.has(el.dataset.icao)) el.remove();
+        });
+
+        allCrs.forEach((c, idx) => {
+            const icao = c.ac.icao24;
+            let row = acListEl.querySelector(`[data-icao="${icao}"]`);
+            const etaHtml = `<span style="color:${scoreColor(c.score)}; margin-right:6px; font-weight:bold;">${c.score}%</span><span class="as-countdown-cell ${etaClass(c.liveEta)}">${fmtEta(c.liveEta)}</span>`;
+            
+            const typeStr = c.ac.type ? ' ' + c.ac.type : '';
+            const catStr = c.ac.category ? ' [' + c.ac.category + ']' : '';
+            const acDetails = typeStr || catStr ? `<span style="color:#889;font-weight:normal;font-size:10px;margin-left:4px;">${typeStr}${catStr}</span>` : '';
+            const nameHtml = `✈ ${c.ac.callsign || c.ac.icao24}${acDetails}`;
+
+            if (!row) {
+                row = document.createElement('div');
+                row.className = 'tx-ac-row';
+                row.style.flexDirection = 'column';
+                row.style.alignItems = 'stretch';
+                row.dataset.icao = icao;
+                
+                const photoDivHtml = S.showPhotos ? `<div class="as-tx-photo" style="margin-top:6px; text-align:center; background:#0a0f18; padding:4px; border-radius:4px; border:1px solid #2a4a7a;"></div>` : '';
+
+                row.innerHTML = `
+                    <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
+                        <span style="color:#fff;">${nameHtml}</span>
+                        <span class="as-tx-eta-cell">${etaHtml}</span>
+                    </div>
+                    ${photoDivHtml}
+                `;
+                
+                const rows = acListEl.querySelectorAll('[data-icao]');
+                if (idx < rows.length) acListEl.insertBefore(row, rows[idx]);
+                else acListEl.appendChild(row);
+
+                const photoDiv = row.querySelector('.as-tx-photo');
+                if (photoDiv && S.showPhotos) {
+                    if (!renderTxDetailsContent.photoCache[icao] && !renderTxDetailsContent.fetching[icao]) {
+                        renderTxDetailsContent.fetching[icao] = true;
+                        photoDiv.innerHTML = '<div style="color:#889; font-size:10px;">📷 Loading photo...</div>';
+                        
+                        fetch(`https://api.planespotters.net/pub/photos/hex/${icao}`)
+                            .then(r => r.json())
+                            .then(data => {
+                                if (data && data.photos && data.photos.length > 0) {
+                                    const photo = data.photos[0];
+                                    renderTxDetailsContent.photoCache[icao] = `<img src="${photo.thumbnail_large.src}" style="max-width:100%; border-radius:4px; display:block;"><div style="font-size:9px; color:#889; margin-top:2px;">© ${photo.photographer}</div>`;
+                                } else {
+                                    renderTxDetailsContent.photoCache[icao] = '<div style="color:#889; font-size:10px;">No photo available</div>';
+                                }
+                                photoDiv.innerHTML = renderTxDetailsContent.photoCache[icao];
+                            })
+                            .catch(() => {
+                                renderTxDetailsContent.fetching[icao] = false;
+                                renderTxDetailsContent.photoCache[icao] = '<div style="color:#f66; font-size:10px;">Photo load error</div>';
+                                photoDiv.innerHTML = renderTxDetailsContent.photoCache[icao];
+                            });
+                    } else if (renderTxDetailsContent.photoCache[icao]) {
+                        photoDiv.innerHTML = renderTxDetailsContent.photoCache[icao];
+                    }
+                } else if (photoDiv && !S.showPhotos) {
+                    photoDiv.style.display = 'none';
+                }
+            } else {
+                const etaCell = row.querySelector('.as-tx-eta-cell');
+                if (etaCell) etaCell.innerHTML = etaHtml;
+            }
+        });
+    }
 
     let _redrawPending = false;
     function redrawFiltered() {
@@ -3174,95 +3093,89 @@ function renderTxDetailsContent(txKey, tx) {
         }
     }
 
-function setupRdsWebSocket() {
-    if (rdsWebsocket && rdsWebsocket.readyState !== WebSocket.CLOSED) return;
+    function setupRdsWebSocket() {
+        if (rdsWebsocket && rdsWebsocket.readyState !== WebSocket.CLOSED) return;
 
-    const connectSocket = (socket) => {
-        rdsWebsocket = socket;
+        const connectSocket = (socket) => {
+            rdsWebsocket = socket;
 
-        if (rdsWebsocket.readyState === WebSocket.OPEN) {
-            debugLog("RDS WebSocket already connected.");
-        } else {
-            rdsWebsocket.addEventListener("open", () => debugLog("RDS WebSocket connected."));
-        }
-
-        rdsWebsocket.addEventListener('message', evt => {
-            if (!isFreqLocked) return;
-
-            let raw;
-            try { raw = JSON.parse(evt.data); } catch (e) { return; }
-
-            let raw_val = null;
-
-            if      (raw.freq      !== undefined) raw_val = raw.freq;
-            else if (raw.frequency !== undefined) raw_val = raw.frequency;
-            else if (raw.status?.freq      !== undefined) raw_val = raw.status.freq;
-            else if (raw.status?.frequency !== undefined) raw_val = raw.status.frequency;
-            else if (raw.data?.freq        !== undefined) raw_val = raw.data.freq;
-            else if (raw.data?.frequency   !== undefined) raw_val = raw.data.frequency;
-
-            if (raw_val === null || raw_val === undefined) return;
-
-            let newFreq = parseFloat(raw_val);
-            if (isNaN(newFreq) || newFreq === 0) return;
-
-            if      (newFreq >= 87500)  newFreq = newFreq / 1000;
-            else if (newFreq >= 8750)   newFreq = newFreq / 100;
-            if      (newFreq > 1080)    newFreq = newFreq / 10;
-            else if (newFreq > 108.0)   newFreq = newFreq / 10;
-
-            if (newFreq < 87.5 || newFreq > 108.0) {
-                debugLog(`[RDS] Frequency ${newFreq} out of FM band – ignoring.`);
-                return;
+            if (rdsWebsocket.readyState === WebSocket.OPEN) {
+                debugLog("RDS WebSocket already connected.");
+            } else {
+                rdsWebsocket.addEventListener("open", () => debugLog("RDS WebSocket connected."));
             }
 
-            const rounded = Math.round(newFreq * 100) / 100;
+            rdsWebsocket.addEventListener('message', evt => {
+                if (!isFreqLocked || !mapActive) return;
 
-            if (_activeFreq !== null &&
-                Math.round(_activeFreq * 100) === Math.round(rounded * 100)) return;
+                let raw;
+                try { raw = JSON.parse(evt.data); } catch (e) { return; }
 
-            debugLog(`[RDS] Frequency update: ${rounded} MHz`);
-            _activeFreq = rounded;
+                let raw_val = null;
 
-            const freqInp = document.getElementById('as-freq-input');
-            if (freqInp) freqInp.value = rounded.toFixed(2);
+                if      (raw.freq      !== undefined) raw_val = raw.freq;
+                else if (raw.frequency !== undefined) raw_val = raw.frequency;
+                else if (raw.status?.freq      !== undefined) raw_val = raw.status.freq;
+                else if (raw.status?.frequency !== undefined) raw_val = raw.status.frequency;
+                else if (raw.data?.freq        !== undefined) raw_val = raw.data.freq;
+                else if (raw.data?.frequency   !== undefined) raw_val = raw.data.frequency;
 
-            redrawFiltered();
-        });
+                if (raw_val === null || raw_val === undefined) return;
 
-        rdsWebsocket.addEventListener("error", (err) => debugLog("RDS WebSocket error:", err));
-        rdsWebsocket.addEventListener("close", () => {
-            debugLog("RDS WebSocket closed, retrying in 5 s...");
-            rdsWebsocket = null;
-            setTimeout(setupRdsWebSocket, 5000);
-        });
-    };
+                let newFreq = parseFloat(raw_val);
+                if (isNaN(newFreq) || newFreq === 0) return;
 
-    // Always reuse the shared promise the webserver exposes – never open a
-    // second raw WebSocket connection, which the server would count as a new client.
-    // This mirrors exactly what the LiveMap plugin does with window.socketPromise.
-    if (typeof window.textSocketPromise !== 'undefined') {
-        window.textSocketPromise
-            .then(connectSocket)
-            .catch(err => {
-                debugLog("textSocketPromise rejected:", err);
+                if      (newFreq >= 87500)  newFreq = newFreq / 1000;
+                else if (newFreq >= 8750)   newFreq = newFreq / 100;
+                if      (newFreq > 1080)    newFreq = newFreq / 10;
+                else if (newFreq > 108.0)   newFreq = newFreq / 10;
+
+                if (newFreq < 87.5 || newFreq > 108.0) {
+                    debugLog(`[RDS] Frequency ${newFreq} out of FM band – ignoring.`);
+                    return;
+                }
+
+                const rounded = Math.round(newFreq * 100) / 100;
+
+                if (_activeFreq !== null &&
+                    Math.round(_activeFreq * 100) === Math.round(rounded * 100)) return;
+
+                debugLog(`[RDS] Frequency update: ${rounded} MHz`);
+                _activeFreq = rounded;
+
+                const freqInp = document.getElementById('as-freq-input');
+                if (freqInp) freqInp.value = rounded.toFixed(2);
+
+                redrawFiltered();
+            });
+
+            rdsWebsocket.addEventListener("error", (err) => debugLog("RDS WebSocket error:", err));
+            rdsWebsocket.addEventListener("close", () => {
+                debugLog("RDS WebSocket closed, retrying in 5 s...");
+                rdsWebsocket = null;
                 setTimeout(setupRdsWebSocket, 5000);
             });
-    } else if (typeof window.socketPromise !== 'undefined') {
-        // Fallback: reuse the main data socket promise if the text-specific
-        // one is not available (older server versions).
-        window.socketPromise
-            .then(connectSocket)
-            .catch(err => {
-                debugLog("socketPromise rejected:", err);
-                setTimeout(setupRdsWebSocket, 5000);
-            });
-    } else {
-        // No shared promise available yet – retry shortly.
-        debugLog("No shared WebSocket promise found, retrying in 1 s...");
-        setTimeout(setupRdsWebSocket, 1000);
+        };
+
+        if (typeof window.textSocketPromise !== 'undefined') {
+            window.textSocketPromise
+                .then(connectSocket)
+                .catch(err => {
+                    debugLog("textSocketPromise rejected:", err);
+                    setTimeout(setupRdsWebSocket, 5000);
+                });
+        } else if (typeof window.socketPromise !== 'undefined') {
+            window.socketPromise
+                .then(connectSocket)
+                .catch(err => {
+                    debugLog("socketPromise rejected:", err);
+                    setTimeout(setupRdsWebSocket, 5000);
+                });
+        } else {
+            debugLog("No shared WebSocket promise found, retrying in 1 s...");
+            setTimeout(setupRdsWebSocket, 1000);
+        }
     }
-}
 
     // ── Settings UI ───────────────────────────────────────────────────────
     function buildSettingsPanelHtml(){
@@ -3290,14 +3203,14 @@ function setupRdsWebSocket() {
                 <input type="number" id="as-s-score" min="1" max="99" step="1" value="${S.minScore}">
                 <span class="as-setting-unit">%</span></div>
             <div class="as-setting-row"><label>Aircraft type filter</label>
-			<select id="as-s-actype">
-				<option value="all" ${S.acTypeFilter==='all' ?'selected':''}>All aircraft</option>
-				<option value="A5"  ${S.acTypeFilter==='A5'  ?'selected':''}>A5+ only (Super Heavy)</option>
-				<option value="A4"  ${S.acTypeFilter==='A4'  ?'selected':''}>A4+ (Heavy & above)</option>
-				<option value="A3"  ${S.acTypeFilter==='A3'  ?'selected':''}>A3+ (Large & above)</option>
-				<option value="A2"  ${S.acTypeFilter==='A2'  ?'selected':''}>A2+ (Small & above)</option>
-				<option value="A1"  ${S.acTypeFilter==='A1'  ?'selected':''}>A1+ (Light & above)</option>
-			</select>
+            <select id="as-s-actype">
+                <option value="all" ${S.acTypeFilter==='all' ?'selected':''}>All aircraft</option>
+                <option value="A5"  ${S.acTypeFilter==='A5'  ?'selected':''}>A5+ only (Super Heavy)</option>
+                <option value="A4"  ${S.acTypeFilter==='A4'  ?'selected':''}>A4+ (Heavy & above)</option>
+                <option value="A3"  ${S.acTypeFilter==='A3'  ?'selected':''}>A3+ (Large & above)</option>
+                <option value="A2"  ${S.acTypeFilter==='A2'  ?'selected':''}>A2+ (Small & above)</option>
+                <option value="A1"  ${S.acTypeFilter==='A1'  ?'selected':''}>A1+ (Light & above)</option>
+            </select>
             </div>
 
             <div class="as-setting-row">
@@ -3313,6 +3226,16 @@ function setupRdsWebSocket() {
                 <label style="color:#fff;">Use Metric System</label>
                 <input type="checkbox" id="as-s-metric" ${S.useMetric ? 'checked' : ''} style="width:auto; cursor:pointer;">
             </div>
+            
+            <div class="as-setting-row">
+                <label style="color:#fff;">Show Aircraft Photos</label>
+                <input type="checkbox" id="as-s-photos" ${S.showPhotos ? 'checked' : ''} style="width:auto; cursor:pointer;">
+            </div>
+
+            <div class="as-setting-row">
+                <label style="color:#fff;">Web server automatically right-aligned</label>
+                <input type="checkbox" id="as-s-rightalign" ${S.autoRightAlign ? 'checked' : ''} style="width:auto; cursor:pointer;">
+            </div>
 
             <div style="border-top:1px solid #2a4a7a;margin:8px 0 6px;"></div>
 
@@ -3323,9 +3246,8 @@ function setupRdsWebSocket() {
             <button id="as-settings-apply">✔ Apply &amp; Reload</button>
             <button id="as-settings-reset">↺ Reset to defaults</button>
         </div>`;
-		
+        
     }
-
 
     function initSettingsPanel(){
         const btn   = document.getElementById('as-settings-btn');
@@ -3383,52 +3305,62 @@ function setupRdsWebSocket() {
             if(!panel.contains(e.target) && e.target !== btn) panel.style.display = 'none';
         });
 
-document.getElementById('as-settings-apply').addEventListener('click', () => {
-    const v = id => document.getElementById(id).value;
-    const isM = document.getElementById('as-s-metric').checked;
+        document.getElementById('as-settings-apply').addEventListener('click', () => {
+            const v = id => document.getElementById(id).value;
+            const isM = document.getElementById('as-s-metric').checked;
+            const isPhotos = document.getElementById('as-s-photos').checked;
+            const isRightAlign = document.getElementById('as-s-rightalign').checked;
 
-    localStorage.setItem('as_use_metric',       isM);
-    localStorage.setItem('as_min_txrx_dist',    v('as-s-txrx'));
-    localStorage.setItem('as_min_erp',          v('as-s-erp'));
-    localStorage.setItem('as_lead_time_str',    v('as-s-lead'));
-    localStorage.setItem('as_trail_time_str',   v('as-s-trail'));
-    localStorage.setItem('as_filter_mode',      v('as-s-filter'));
-    localStorage.setItem('as_ac_type_filter',   v('as-s-actype'));
-    localStorage.setItem('as_tx_radius',        v('as-s-maxrad'));
-    localStorage.setItem('as_ac_radius',        v('as-s-maxrad'));
-    localStorage.setItem('as_min_score',        v('as-s-score'));
-    localStorage.setItem('as_rx_agl',           v('as-s-rxagl'));
+            localStorage.setItem('as_use_metric',       isM);
+            localStorage.setItem('as_show_photos',      isPhotos);
+            localStorage.setItem('as_auto_right_align', isRightAlign);
+            localStorage.setItem('as_min_txrx_dist',    v('as-s-txrx'));
+            localStorage.setItem('as_min_erp',          v('as-s-erp'));
+            localStorage.setItem('as_lead_time_str',    v('as-s-lead'));
+            localStorage.setItem('as_trail_time_str',   v('as-s-trail'));
+            localStorage.setItem('as_filter_mode',      v('as-s-filter'));
+            localStorage.setItem('as_ac_type_filter',   v('as-s-actype'));
+            localStorage.setItem('as_tx_radius',        v('as-s-maxrad'));
+            localStorage.setItem('as_ac_radius',        v('as-s-maxrad'));
+            localStorage.setItem('as_min_score',        v('as-s-score'));
+            localStorage.setItem('as_rx_agl',           v('as-s-rxagl'));
 
-    S = loadSettings();
-    _rxElevM = _rxTerrainM + S.rxAglM;
-	invalidateTxEnvelopeCache();
-    panel.style.display = 'none';
-    _persistentCrossings = {};
-    const detailBody = document.getElementById('as-tx-detail-body');
-    if (detailBody) { detailBody.dataset.txKey = ''; detailBody.dataset.filterMode = ''; }
+            S = loadSettings();
+            _rxElevM = _rxTerrainM + S.rxAglM;
+            invalidateTxEnvelopeCache();
+            panel.style.display = 'none';
+            _persistentCrossings = {};
+            const detailBody = document.getElementById('as-tx-detail-body');
+            if (detailBody) { detailBody.dataset.txKey = ''; detailBody.dataset.filterMode = ''; }
 
-    if (_activeTxKey || _activeProfileTxKey) {
-        hideTxDetails();
-    }
+            if (_activeTxKey || _activeProfileTxKey) {
+                hideTxDetails();
+            }
 
-    localStorage.removeItem(DB_CACHE_KEY);
-    localStorage.removeItem(DB_CACHE_TS);
-    localStorage.removeItem(DB_CACHE_LOC);
+            localStorage.removeItem(DB_CACHE_KEY);
+            localStorage.removeItem(DB_CACHE_TS);
+            localStorage.removeItem(DB_CACHE_LOC);
 
-    startUpdate(false);
-});
+            if (typeof applyRightAlign === 'function') {
+                applyRightAlign(mapActive);
+            }
+
+            startUpdate(false);
+        });
 
         document.getElementById('as-settings-reset').addEventListener('click', () => {
-            document.getElementById('as-s-metric').checked  = true;
-            document.getElementById('as-s-txrx').value      = 400;
-            document.getElementById('as-s-erp').value       = 100;
-            document.getElementById('as-s-lead').value      = '03:00';
-            document.getElementById('as-s-trail').value     = '01:00';
-            document.getElementById('as-s-maxrad').value    = 750;
-            document.getElementById('as-s-score').value     = 70;
-            document.getElementById('as-s-rxagl').value     = RX_AGL_DEFAULT_M;
-            document.getElementById('as-s-filter').value    = 'none';
-            document.getElementById('as-s-actype').value    = 'all';
+            document.getElementById('as-s-metric').checked      = true;
+            document.getElementById('as-s-photos').checked      = true;
+            document.getElementById('as-s-rightalign').checked  = false;
+            document.getElementById('as-s-txrx').value          = 400;
+            document.getElementById('as-s-erp').value           = 100;
+            document.getElementById('as-s-lead').value          = '03:00';
+            document.getElementById('as-s-trail').value         = '01:00';
+            document.getElementById('as-s-maxrad').value        = 750;
+            document.getElementById('as-s-score').value         = 70;
+            document.getElementById('as-s-rxagl').value         = RX_AGL_DEFAULT_M;
+            document.getElementById('as-s-filter').value        = 'none';
+            document.getElementById('as-s-actype').value        = 'all';
         });
     }
 
@@ -3537,7 +3469,7 @@ document.getElementById('as-settings-apply').addEventListener('click', () => {
         addResize(wrapper);
         initSettingsPanel();
         initProfileCanvasEvents();
-		initProfileCanvasHover();
+        initProfileCanvasHover();
 
         document.getElementById('as-close').onclick           = closeMap;
         document.getElementById('as-tx-detail-close').onclick = hideTxDetails;
@@ -3682,10 +3614,20 @@ document.getElementById('as-settings-apply').addEventListener('click', () => {
 
     function closeMap() {
         mapActive = false;
+        
+        // Ensure all background tasks are strictly stopped
         if(aircraftTimer)  { clearInterval(aircraftTimer);  aircraftTimer  = null; }
         if(countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+        
+        applyRightAlign(false); // Reverts the UI position
+        
+        if (ws) { ws.close(); ws = null; } // Kills the data WS
+        if (rdsWebsocket) { rdsWebsocket.close(); rdsWebsocket = null; } // Kills the RDS WS
+        if (mainWebsocket) { mainWebsocket.close(); mainWebsocket = null; } // Kills main WS
+
         const btn = document.getElementById('AIRPLANESCATTER-on-off');
         if(btn) btn.classList.remove('active');
+        
         const wrapper = document.getElementById('as-wrapper');
         if(wrapper) {
             wrapper.classList.remove('as-fade-in');
@@ -3923,92 +3865,83 @@ document.getElementById('as-settings-apply').addEventListener('click', () => {
         }
     }
 
-function startCountdownTick() {
-    if (countdownTimer) return;
-    countdownTimer = setInterval(() => {
-        if (!mapActive || !mapInstance) return;
+    function startCountdownTick() {
+        if (countdownTimer) return;
+        countdownTimer = setInterval(() => {
+            if (!mapActive || !mapInstance) return;
 
-        // Update cheap per-second things
-        updateListCountdownsOnly();
-        redrawActiveProfile();
-    }, COUNTDOWN_TICK_MS);
-}
+            updateListCountdownsOnly();
+            redrawActiveProfile();
+        }, COUNTDOWN_TICK_MS);
+    }
 
 
-function updateListCountdownsOnly() {
-    const allVisible = getActiveVisibleCrossings();
-    const primary = getPrimaryCrossings(allVisible);
+    function updateListCountdownsOnly() {
+        const allVisible = getActiveVisibleCrossings();
+        const primary = getPrimaryCrossings(allVisible);
 
-    // 1. Update Map Marker Countdowns directly (Lightweight DOM update)
-    primary.forEach(cr => {
-        const icao = cr.ac.icao24;
-        if (typeof _drMarkers !== 'undefined' && _drMarkers[icao]) {
-            const entry = _drMarkers[icao];
-            const liveEta = cr.liveEta;
-            
-            // Only update the text and color class of the existing map label icon
-            if (entry.label && entry.label._icon) {
-                const span = entry.label._icon.querySelector('span');
-                if (span) {
-                    span.textContent = fmtEta(liveEta);
-                    span.className = 'as-countdown-cell ' + etaClass(liveEta);
+        primary.forEach(cr => {
+            const icao = cr.ac.icao24;
+            if (typeof _drMarkers !== 'undefined' && _drMarkers[icao]) {
+                const entry = _drMarkers[icao];
+                const liveEta = cr.liveEta;
+                
+                if (entry.label && entry.label._icon) {
+                    const span = entry.label._icon.querySelector('span');
+                    if (span) {
+                        span.textContent = fmtEta(liveEta);
+                        span.className = 'as-countdown-cell ' + etaClass(liveEta);
+                    }
                 }
             }
+        });
+
+        const listBody = document.getElementById('as-list-body');
+        if (listBody) {
+            const etaMap = {};
+            primary.forEach(cr => {
+                const txKey = cr.tx.lat + '_' + cr.tx.lon + '_' + cr.tx.freq;
+                const rowKey = cr.ac.icao24 + '|' + txKey;
+                etaMap[rowKey] = cr.liveEta;
+            });
+
+            listBody.querySelectorAll('.as-list-item[data-tx-key][data-icao]').forEach(row => {
+                const rowKey = row.dataset.icao + '|' + row.dataset.txKey;
+                if (etaMap[rowKey] === undefined) return;
+
+                const liveEta = etaMap[rowKey];
+
+                const etaEl = row.querySelector('.as-li-eta');
+                if (etaEl) {
+                    etaEl.textContent = fmtEta(liveEta);
+                    etaEl.className = 'as-li-eta ' + etaClass(liveEta);
+                }
+
+                row.classList.toggle('as-list-approaching', liveEta > (S.leadTimeSec / 2));
+            });
         }
-    });
 
-    // 2. Update Left Panel List
-    const listBody = document.getElementById('as-list-body');
-    if (listBody) {
-        // Build a lookup keyed by "icao|txKey"
-        const etaMap = {};
-        primary.forEach(cr => {
-            const txKey = cr.tx.lat + '_' + cr.tx.lon + '_' + cr.tx.freq;
-            const rowKey = cr.ac.icao24 + '|' + txKey;
-            etaMap[rowKey] = cr.liveEta;
-        });
+        const acList = document.getElementById('as-tx-ac-list');
+        if (acList) {
+            const detailEtaMap = {};
+            allVisible.forEach(cr => {
+                if (_activeTxKey && (cr.tx.lat + '_' + cr.tx.lon + '_' + cr.tx.freq) !== _activeTxKey) return;
+                detailEtaMap[cr.ac.icao24] = cr.liveEta;
+            });
 
-        // Use data-tx-key + data-icao (the attributes that updateListPanel actually sets)
-        listBody.querySelectorAll('.as-list-item[data-tx-key][data-icao]').forEach(row => {
-            const rowKey = row.dataset.icao + '|' + row.dataset.txKey;
-            if (etaMap[rowKey] === undefined) return;
-
-            const liveEta = etaMap[rowKey];
-
-            const etaEl = row.querySelector('.as-li-eta');
-            if (etaEl) {
-                etaEl.textContent = fmtEta(liveEta);
-                etaEl.className = 'as-li-eta ' + etaClass(liveEta);
-            }
-
-            // Also keep the approaching fade in sync
-            row.classList.toggle('as-list-approaching', liveEta > (S.leadTimeSec / 2));
-        });
+            acList.querySelectorAll('[data-icao]').forEach(row => {
+                const icao = row.dataset.icao;
+                if (detailEtaMap[icao] === undefined) return;
+                const liveEta = detailEtaMap[icao];
+                const etaCell = row.querySelector('.as-tx-eta-cell');
+                if (etaCell) {
+                    etaCell.innerHTML =
+                        `<span style="color:${scoreColor(allVisible.find(c => c.ac.icao24 === icao)?.score ?? 0)}; margin-right:6px; font-weight:bold;">${allVisible.find(c => c.ac.icao24 === icao)?.score ?? 0}%</span>` +
+                        `<span class="as-countdown-cell ${etaClass(liveEta)}">${fmtEta(liveEta)}</span>`;
+                }
+            });
+        }
     }
-
-    // 3. Update the TX detail panel ETA cells if it is open
-    const acList = document.getElementById('as-tx-ac-list');
-    if (acList) {
-        // Build a per-icao eta map for the detail panel (all visible crossings for active TX)
-        const detailEtaMap = {};
-        allVisible.forEach(cr => {
-            if (_activeTxKey && (cr.tx.lat + '_' + cr.tx.lon + '_' + cr.tx.freq) !== _activeTxKey) return;
-            detailEtaMap[cr.ac.icao24] = cr.liveEta;
-        });
-
-        acList.querySelectorAll('[data-icao]').forEach(row => {
-            const icao = row.dataset.icao;
-            if (detailEtaMap[icao] === undefined) return;
-            const liveEta = detailEtaMap[icao];
-            const etaCell = row.querySelector('.as-tx-eta-cell');
-            if (etaCell) {
-                etaCell.innerHTML =
-                    `<span style="color:${scoreColor(allVisible.find(c => c.ac.icao24 === icao)?.score ?? 0)}; margin-right:6px; font-weight:bold;">${allVisible.find(c => c.ac.icao24 === icao)?.score ?? 0}%</span>` +
-                    `<span class="as-countdown-cell ${etaClass(liveEta)}">${fmtEta(liveEta)}</span>`;
-            }
-        });
-    }
-}
 
     // ── Data Fetching ─────────────────────────────────────────────────────
     const DB_CACHE_KEY = 'as_fmdx_db';
@@ -4028,45 +3961,36 @@ function updateListCountdownsOnly() {
         return true;
     }
 
- // ── FMDX endpoint (server-side cached & filtered) ─────────────────────────
-const FMDX_API_ENDPOINT = currentUrlForProxy.origin
-    + currentUrlForProxy.pathname.replace(/\/setup\/?$/, '/').replace(/\/$/, '')
-    + '/api/airplanescatter/fmdx';
+    const FMDX_API_ENDPOINT = currentUrlForProxy.origin
+        + currentUrlForProxy.pathname.replace(/\/setup\/?$/, '/').replace(/\/$/, '')
+        + '/api/airplanescatter/fmdx';
 
-async function loadTxDatabase(lat, lon) {
-    // Use the client-side localStorage cache first (avoids hitting the server
-    // on every panel open – server itself re-fetches upstream at most once per 24 h)
-    if (isFmdxCacheValid(lat, lon)) {
+    async function loadTxDatabase(lat, lon) {
+        if (isFmdxCacheValid(lat, lon)) {
+            try {
+                const raw = localStorage.getItem(DB_CACHE_KEY);
+                if (raw) return JSON.parse(raw);
+            } catch (e) {}
+        }
+
+        const url = `${FMDX_API_ENDPOINT}?qth=${encodeURIComponent(lat + ',' + lon)}`
+                  + `&radius=${S.txRadiusKm}&erp=${S.minTxErpKw}`;
+
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`TX DB fetch failed: HTTP ${r.status}`);
+
+        const stations = await r.json();
+
         try {
-            const raw = localStorage.getItem(DB_CACHE_KEY);
-            if (raw) return JSON.parse(raw);
-        } catch (e) {}
+            localStorage.setItem(DB_CACHE_KEY, JSON.stringify(stations));
+            localStorage.setItem(DB_CACHE_TS,  String(Date.now()));
+            localStorage.setItem(DB_CACHE_LOC, JSON.stringify({ lat, lon, radius: S.txRadiusKm }));
+        } catch (e) {
+            console.warn('[Airplane Scatter] Not enough space to cache TX DB in localStorage.');
+        }
+
+        return stations;
     }
-
-    // Request the pre-filtered station list from our own server.
-    // The server holds the full 50 MB DB locally; only the filtered result
-    // (typically < 200 KB) is transferred to the client.
-    const url = `${FMDX_API_ENDPOINT}?qth=${encodeURIComponent(lat + ',' + lon)}`
-              + `&radius=${S.txRadiusKm}&erp=${S.minTxErpKw}`;
-
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(`TX DB fetch failed: HTTP ${r.status}`);
-
-    // The server already returns a ready-to-use stations[] array –
-    // no further parsing or filtering is needed on the client side.
-    const stations = await r.json();
-
-    // Persist to localStorage so subsequent opens are instant
-    try {
-        localStorage.setItem(DB_CACHE_KEY, JSON.stringify(stations));
-        localStorage.setItem(DB_CACHE_TS,  String(Date.now()));
-        localStorage.setItem(DB_CACHE_LOC, JSON.stringify({ lat, lon, radius: S.txRadiusKm }));
-    } catch (e) {
-        console.warn('[Airplane Scatter] Not enough space to cache TX DB in localStorage.');
-    }
-
-    return stations;
-}
 
     const ADSB_SOURCES = [
         {
@@ -4130,15 +4054,16 @@ async function loadTxDatabase(lat, lon) {
     let _adsbSourceIndex = 0;
 
     async function fetchAircraft(lat, lon, radiusKm) {
+        if(!mapActive) return [];
         radiusKm = (radiusKm && !isNaN(radiusKm) && radiusKm > 0) ? radiusKm : 750;
         const tilePoints  = getTilePoints(lat, lon, radiusKm);
         const perTileKm   = 460;
         const allAircraft = new Map();
 
-        // Helper function to sleep
         const sleep = ms => new Promise(r => setTimeout(r, ms));
 
         for (const point of tilePoints) {
+            if (!mapActive) break;
             for (let attempt = 0; attempt < ADSB_SOURCES.length; attempt++) {
                 const srcIdx = (_adsbSourceIndex + attempt) % ADSB_SOURCES.length;
                 const src    = ADSB_SOURCES[srcIdx];
@@ -4159,19 +4084,18 @@ async function loadTxDatabase(lat, lon) {
                             allAircraft.set(ac.icao24, ac);
                         }
                     });
-                    break; // Success, break out of the retry loop
+                    break; 
                 } catch (err) {
                     console.warn(`[Airplane Scatter] ADS-B Source Failed: ${src.name} | Error:`, err.message);
                 }
             }
             
-            // Add a 500ms delay between tile points to prevent bursting the API
             if (tilePoints.length > 1) {
                 await sleep(500); 
             }
         }
 
-        if (allAircraft.size === 0) throw new Error('All ADS-B APIs unavailable or rate limited');
+        if (allAircraft.size === 0 && mapActive) throw new Error('All ADS-B APIs unavailable or rate limited');
         return Array.from(allAircraft.values());
     }
 
@@ -4191,101 +4115,108 @@ async function loadTxDatabase(lat, lon) {
         document.head.appendChild(scr);
     }
 
-async function startUpdate(forceReload) {
-    const rx = getRxCoords(); if (!rx) return;
-    const reloadBtn = document.getElementById('as-reload');
-    if (reloadBtn) reloadBtn.classList.add('spinning');
-    updateStatusText('⏳ Loading...', 0, 0, 0);
+    async function startUpdate(forceReload) {
+        if (!mapActive) return;
+        const rx = getRxCoords(); if (!rx) return;
+        const reloadBtn = document.getElementById('as-reload');
+        if (reloadBtn) reloadBtn.classList.add('spinning');
+        updateStatusText('⏳ Loading...', 0, 0, 0);
 
-    if (forceReload || _rxTerrainM === 0) {
-        _rxTerrainM = await fetchElevationSingle(rx.lat, rx.lon);
-        _rxElevM    = _rxTerrainM + S.rxAglM;
-        const rxTerrainUI = document.getElementById('as-rx-terrain-val');
-        if (rxTerrainUI) rxTerrainUI.textContent = Math.round(_rxTerrainM);
-        invalidateTxEnvelopeCache();
-    }
-
-    updateRxMarkerTooltip(rx);
-
-    try {
-        // ── Load userlist beam data in parallel with TX DB ────────────────
-        await Promise.all([
-            loadTxDatabase(rx.lat, rx.lon).then(stations => { txStations = stations; }),
-			
-            loadUserlist()
-        ]);
-
-        // ── Merge beam directions from userlist into txStations ───────────
-        await enrichTxBeamData(txStations);
-
-        const freqFilterList = await fetchFrequencyList(S.filterMode);
-        if (S.filterMode !== 'none') {
-            if (freqFilterList.size === 0 && S.filterMode === 'whitelist') {
-                console.warn('[Airplane Scatter] Whitelist is empty or failed to load – showing all stations.');
-            } else if (freqFilterList.size > 0) {
-                txStations = txStations.filter(tx => {
-                    const txFreqRounded = Math.round(tx.freq * 100);
-                    if (S.filterMode === 'whitelist') return  freqFilterList.has(txFreqRounded);
-                    if (S.filterMode === 'blacklist') return !freqFilterList.has(txFreqRounded);
-                    return true;
-                });
-            }
-        }
-
-        invalidateTxEnvelopeCache();
-
-        txStationGrid = await buildTxGridAsync(txStations);
-        updateRxMarkerTooltip(rx);
-        enrichTxElevations(txStations).then(async () => {
+        if (forceReload || _rxTerrainM === 0) {
+            _rxTerrainM = await fetchElevationSingle(rx.lat, rx.lon);
+            _rxElevM    = _rxTerrainM + S.rxAglM;
+            const rxTerrainUI = document.getElementById('as-rx-terrain-val');
+            if (rxTerrainUI) rxTerrainUI.textContent = Math.round(_rxTerrainM);
             invalidateTxEnvelopeCache();
-            // Re-apply beam data after elevation enrichment (stations array is same ref)
+        }
+
+        if (!mapActive) { if (reloadBtn) reloadBtn.classList.remove('spinning'); return; }
+        updateRxMarkerTooltip(rx);
+
+        try {
+            await Promise.all([
+                loadTxDatabase(rx.lat, rx.lon).then(stations => { txStations = stations; }),
+                
+                loadUserlist()
+            ]);
+
+            if (!mapActive) { if (reloadBtn) reloadBtn.classList.remove('spinning'); return; }
+
             await enrichTxBeamData(txStations);
+
+            const freqFilterList = await fetchFrequencyList(S.filterMode);
+            if (S.filterMode !== 'none') {
+                if (freqFilterList.size === 0 && S.filterMode === 'whitelist') {
+                    console.warn('[Airplane Scatter] Whitelist is empty or failed to load – showing all stations.');
+                } else if (freqFilterList.size > 0) {
+                    txStations = txStations.filter(tx => {
+                        const txFreqRounded = Math.round(tx.freq * 100);
+                        if (S.filterMode === 'whitelist') return  freqFilterList.has(txFreqRounded);
+                        if (S.filterMode === 'blacklist') return !freqFilterList.has(txFreqRounded);
+                        return true;
+                    });
+                }
+            }
+
+            invalidateTxEnvelopeCache();
+
             txStationGrid = await buildTxGridAsync(txStations);
-            if (mapInstance) redrawFiltered();
-        });
-    } catch (e) {
-        updateStatusText('⚠ TX DB Error: ' + e.message, 0, 0, 0);
-        if (reloadBtn) reloadBtn.classList.remove('spinning');
-        return;
-    }
+            updateRxMarkerTooltip(rx);
+            enrichTxElevations(txStations).then(async () => {
+                if (!mapActive) return;
+                invalidateTxEnvelopeCache();
+                await enrichTxBeamData(txStations);
+                if (!mapActive) return;
+                txStationGrid = await buildTxGridAsync(txStations);
+                if (mapInstance && mapActive) redrawFiltered();
+            });
+        } catch (e) {
+            if (mapActive) updateStatusText('⚠ TX DB Error: ' + e.message, 0, 0, 0);
+            if (reloadBtn) reloadBtn.classList.remove('spinning');
+            return;
+        }
 
-    let fetchedAircraft = [];
-    try {
-        fetchedAircraft = await fetchAircraft(rx.lat, rx.lon, S.aircraftRadiusKm);
-    } catch (e) {
-        updateStatusText('⚠ ADS-B Error: ' + e.message, 0, txStations.length, 0);
-        if (reloadBtn) reloadBtn.classList.remove('spinning');
-        return;
-    }
+        let fetchedAircraft = [];
+        try {
+            fetchedAircraft = await fetchAircraft(rx.lat, rx.lon, S.aircraftRadiusKm);
+        } catch (e) {
+            if (mapActive) updateStatusText('⚠ ADS-B Error: ' + e.message, 0, txStations.length, 0);
+            if (reloadBtn) reloadBtn.classList.remove('spinning');
+            return;
+        }
 
-    const now = Date.now();
-    fetchedAircraft.forEach(ac => { _activeAircraft[ac.icao24] = { ...ac, _lastSeen: now }; });
+        if (!mapActive) { if (reloadBtn) reloadBtn.classList.remove('spinning'); return; }
 
-    const robustList = [];
-    for (let icao in _activeAircraft) {
-        const ac = _activeAircraft[icao];
-        if (now - ac._lastSeen > AIRCRAFT_TIMEOUT_MS) {
-            delete _activeAircraft[icao];
-        } else {
-            const staleSec = (now - ac._lastSeen) / 1000;
-            if (staleSec > 1 && ac.track !== null && ac.speed > 0) {
-                const dr = deadReckon(ac.lat, ac.lon, ac.track, ac.speed, staleSec);
-                robustList.push({ ...ac, lat: dr.lat, lon: dr.lon });
+        const now = Date.now();
+        fetchedAircraft.forEach(ac => { _activeAircraft[ac.icao24] = { ...ac, _lastSeen: now }; });
+
+        const robustList = [];
+        for (let icao in _activeAircraft) {
+            const ac = _activeAircraft[icao];
+            if (now - ac._lastSeen > AIRCRAFT_TIMEOUT_MS) {
+                delete _activeAircraft[icao];
             } else {
-                robustList.push(ac);
+                const staleSec = (now - ac._lastSeen) / 1000;
+                if (staleSec > 1 && ac.track !== null && ac.speed > 0) {
+                    const dr = deadReckon(ac.lat, ac.lon, ac.track, ac.speed, staleSec);
+                    robustList.push({ ...ac, lat: dr.lat, lon: dr.lon });
+                } else {
+                    robustList.push(ac);
+                }
             }
         }
+
+        await computePersistentCrossings(robustList, rx.lat, rx.lon);
+        if (!mapActive) { if (reloadBtn) reloadBtn.classList.remove('spinning'); return; }
+
+        _lastFetchTime = now;
+
+        ensureLeaflet(() => { if (mapInstance && mapActive) redrawFiltered(); });
+
+        const activeCandsCount = getPrimaryCrossings(getActiveVisibleCrossings()).length;
+        if (mapActive) updateStatusText(new Date().toTimeString().slice(0, 8), robustList.length, txStations.length, activeCandsCount);
+        if (reloadBtn) reloadBtn.classList.remove('spinning');
     }
-
-    await computePersistentCrossings(robustList, rx.lat, rx.lon);
-    _lastFetchTime = now;
-
-    ensureLeaflet(() => { if (mapInstance) redrawFiltered(); });
-
-    const activeCandsCount = getPrimaryCrossings(getActiveVisibleCrossings()).length;
-    updateStatusText(new Date().toTimeString().slice(0, 8), robustList.length, txStations.length, activeCandsCount);
-    if (reloadBtn) reloadBtn.classList.remove('spinning');
-}
 
     function createButton(){
         (function waitForPanel(){
@@ -4324,6 +4255,9 @@ async function startUpdate(forceReload) {
 
     function openMap(rxLat, rxLon){
         createMapContainer(rxLat, rxLon);
+        if (typeof applyRightAlign === 'function') {
+            applyRightAlign(true);
+        }
         ensureLeaflet(() => {
             startUpdate(false);
             setupMainWebSocket();
