@@ -3,9 +3,9 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 
 <img width="2094" height="826" alt="grafik" src="https://github.com/user-attachments/assets/4cb9993f-6bc8-46d4-8971-4d57121ce4e6" />
 <img width="500" height="480" alt="grafik" src="https://github.com/user-attachments/assets/3c5f25a6-2b73-4b8d-9394-1b1016d3d9c4" />
-<img width="310" height="440" alt="grafik" src="https://github.com/user-attachments/assets/59e1bb3d-b202-4b7d-958d-3106a321d547" />
+<img width="280" height="460" alt="grafik" src="https://github.com/user-attachments/assets/2c74b65f-a049-4ea0-837d-4f3efbbe18a2" />
 
-## Version 2.3 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
+## Version 2.3a (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 
 - Airplane Photo display can now be enabled and disabled in the settings
 - Function to automatically move the web server to the right added to the settings (thanks to bojcha for the idea & code)
