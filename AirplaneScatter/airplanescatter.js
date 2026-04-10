@@ -462,6 +462,7 @@
     let ws                   = null;
     let mainWebsocket        = null;
     let rdsWebsocket         = null;
+	let asPluginClosing      = false;
     let gpsLat               = null;
     let gpsLon               = null;
 
@@ -3080,10 +3081,12 @@
                         mainWebsocket.addEventListener("open", () => debugLog("Main WebSocket connected."));
                     }
                     mainWebsocket.addEventListener("error", (error) => debugLog("Main WebSocket error:", error));
-                    mainWebsocket.addEventListener("close", () => {
-                        debugLog("Main WebSocket connection closed, retrying in 5 seconds.");
-                        setTimeout(setupMainWebSocket, 5000);
-                    });
+mainWebsocket.addEventListener("close", () => {
+    debugLog("Main WebSocket closed");
+    mainWebsocket = null;
+    if (!mapActive || asPluginClosing) return;
+    setTimeout(setupMainWebSocket, 5000);
+});
                 } else {
                     debugLog("window.socketPromise is undefined.");
                 }
@@ -3150,11 +3153,12 @@
             });
 
             rdsWebsocket.addEventListener("error", (err) => debugLog("RDS WebSocket error:", err));
-            rdsWebsocket.addEventListener("close", () => {
-                debugLog("RDS WebSocket closed, retrying in 5 s...");
-                rdsWebsocket = null;
-                setTimeout(setupRdsWebSocket, 5000);
-            });
+rdsWebsocket.addEventListener("close", () => {
+    debugLog("RDS WebSocket closed");
+    rdsWebsocket = null;
+    if (!mapActive || asPluginClosing) return;
+    setTimeout(setupRdsWebSocket, 5000);
+});
         };
 
         if (typeof window.textSocketPromise !== 'undefined') {
@@ -3612,44 +3616,82 @@
         });
     }
 
-    function closeMap() {
-        mapActive = false;
-        
-        // Ensure all background tasks are strictly stopped
-        if(aircraftTimer)  { clearInterval(aircraftTimer);  aircraftTimer  = null; }
-        if(countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
-        
-        applyRightAlign(false); // Reverts the UI position
-        
-        if (ws) { ws.close(); ws = null; } // Kills the data WS
-        if (rdsWebsocket) { rdsWebsocket.close(); rdsWebsocket = null; } // Kills the RDS WS
-        if (mainWebsocket) { mainWebsocket.close(); mainWebsocket = null; } // Kills main WS
+function closeMap() {
+    mapActive = false;
+    asPluginClosing = true;
 
-        const btn = document.getElementById('AIRPLANESCATTER-on-off');
-        if(btn) btn.classList.remove('active');
-        
-        const wrapper = document.getElementById('as-wrapper');
-        if(wrapper) {
-            wrapper.classList.remove('as-fade-in');
-            wrapper.classList.add('as-fade-out');
-            wrapper.addEventListener('animationend', () => {
-                wrapper.remove();
-                if (mapInstance) { mapInstance.remove(); mapInstance = null; }
-                mapContainer  = null;
-                txLayer       = null;
-                aircraftLayer = null;
-                lineLayer     = null;
-                rxMarker      = null;
-                _txElements   = {};
-                _drMarkers    = {};
-                _activeCompass = null;
-                _activeFreq    = null;
-                _activeTxKey   = null;
-                isFreqLocked    = false;
-                isCompassLocked = false;
-            });
+    const wrapper = document.getElementById('as-wrapper');
+    if (wrapper) {
+        localStorage.setItem('as_left', wrapper.offsetLeft);
+        localStorage.setItem('as_top', wrapper.offsetTop);
+        localStorage.setItem('as_height', wrapper.offsetHeight);
+
+        if (mapContainer) {
+            localStorage.setItem('as_width', mapContainer.offsetWidth);
         }
     }
+
+    if (aircraftTimer) {
+        clearInterval(aircraftTimer);
+        aircraftTimer = null;
+    }
+    if (countdownTimer) {
+        clearInterval(countdownTimer);
+        countdownTimer = null;
+    }
+
+    applyRightAlign(false);
+
+    if (ws) {
+        try { ws.close(); } catch (e) {}
+        ws = null;
+    }
+
+    rdsWebsocket = null;
+    mainWebsocket = null;
+
+    const btn = document.getElementById('AIRPLANESCATTER-on-off');
+    if (btn) btn.classList.remove('active');
+
+    if (wrapper) {
+        wrapper.classList.remove('as-fade-in');
+        wrapper.classList.add('as-fade-out');
+
+        wrapper.addEventListener('animationend', () => {
+            if (mapInstance) {
+                mapInstance.remove();
+                mapInstance = null;
+            }
+
+            wrapper.remove();
+
+            mapContainer = null;
+            txLayer = null;
+            aircraftLayer = null;
+            lineLayer = null;
+            rxMarker = null;
+
+            _txElements = {};
+            _drMarkers = {};
+            _activeAircraft = {};
+            _persistentCrossings = {};
+            _currentPathElevs = null;
+
+            _activeCompass = null;
+            _activeFreq = null;
+            _activeTxKey = null;
+            _activeTxObj = null;
+            _activeProfileTxKey = null;
+            _activeProfileTxObj = null;
+
+            isFreqLocked = false;
+            isCompassLocked = false;
+            profMinX = 0;
+            profMaxX = 0;
+            _currentProfileDist = 0;
+        }, { once: true });
+    }
+}
 
     function addDrag(el, handle){
         let ox, oy, sl, st;
@@ -4229,7 +4271,7 @@
                     if(!btn) return;
                     btnObs.disconnect();
                     btn.classList.add('hide-phone', 'bg-color-2');
-                    btn.title = `Airplane Scatter v${pluginVersion}`;
+                    btn.removeAttribute('title');
                     btn.addEventListener('click', () => {
                         if (!mapActive) {
                             const rx = getRxCoords();
@@ -4254,6 +4296,7 @@
     }
 
     function openMap(rxLat, rxLon){
+		asPluginClosing = false;
         createMapContainer(rxLat, rxLon);
         if (typeof applyRightAlign === 'function') {
             applyRightAlign(true);
