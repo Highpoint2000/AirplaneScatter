@@ -5,10 +5,10 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 <img width="500" height="480" alt="grafik" src="https://github.com/user-attachments/assets/3c5f25a6-2b73-4b8d-9394-1b1016d3d9c4" />
 <img width="280" height="460" alt="grafik" src="https://github.com/user-attachments/assets/2c74b65f-a049-4ea0-837d-4f3efbbe18a2" />
 
-## Version 2.3a (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
+## Version 2.3b (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 
-- Airplane Photo display can now be enabled and disabled in the settings
-- Function to automatically move the web server to the right added to the settings (thanks to bojcha for the idea & code)
+- Automatically maintains a server-side elevation_cache.json file to locally store topographic points, significantly lowering external API queries and speeding up elevation resolution
+- A new two-pass terrain validation algorithm ensures that aircraft situated physically below the horizon line due to real mountain terrain are instantly excluded during the scoring calculation. This drastically reduces false positives from terrain-obstructed paths
 
 ## Installation notes
 
@@ -63,13 +63,18 @@ If you have any questions, would like to report problems, or have suggestions fo
 <details>
 <summary>History</summary>
 
-## Version 2.3 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
+### Version 2.3a (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
+
+- Airplane Photo display can now be enabled and disabled in the settings
+- Function to automatically move the web server to the right added to the settings (thanks to bojcha for the idea & code)
+
+### Version 2.3 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 
 - Important performance improvements, audio dropouts fixed
 - Added additional sweet spot marker to the map
 - Added display of airplane photos
 
-## Version 2.2 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
+### Version 2.2 (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 
 - Integration of the fmscan.org database file userlist1.csv to display additional information and the transmitter's radiation direction (optical display + score influence)
 - Fixed error in compass filter (NE/E selection)
