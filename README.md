@@ -23,7 +23,7 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 9. Start/Restart the fm-dx-webserver with "npm run webserver" on node.js console, check the console informations 
 10. Reload the browser
 
-NOTE: DON'T FORGET TO RESTART THE SERVER TWICE AFTER INTSLLING AND ACTIVATING THE PLUGIN!
+NOTE: DON'T FORGET TO RESTART THE SERVER TWICE AFTER INSTALLING AND ACTIVATING THE PLUGIN!
 
 ## How to use
                                          
