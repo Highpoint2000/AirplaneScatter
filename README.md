@@ -16,7 +16,7 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 2. Unpack all files from the folder to ..fm-dx-webserver-main\plugins\ 
 3. Stop or close the fm-dx-webserver
 4. Start/Restart the fm-dx-webserver with "npm run webserver" on node.js console, check the console informations
-5. Activate the sysinfo plugin in the settings
+5. Activate the Airplane Scatter plugin in the settings
 6. Stop or close the fm-dx-webserver
 7. Start/Restart the fm-dx-webserver with "npm run webserver" on node.js console, check the console informations (for patching tx_search.js)
 8. Stop or close the fm-dx-webserver
