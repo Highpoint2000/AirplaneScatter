@@ -1,8 +1,8 @@
 /////////////////////////////////////////////////////////////////
 //                                                             //
-//  AIRPLANE SCATTER CLIENT PLUGIN FOR FM-DX-WEBSERVER (V2.3b) //
+//  AIRPLANE SCATTER CLIENT PLUGIN FOR FM-DX-WEBSERVER (V2.4) //
 //                                                             //
-//  by Highpoint                last update: 2026-04-10        //
+//  by Highpoint                last update: 2026-05-07        //
 //                                                             //
 //  https://github.com/Highpoint2000/AirplaneScatter           //
 //                                                             //
@@ -11,7 +11,7 @@
 (() => {
 
     // ── Plugin metadata & Update Check ────────────────────────────────────
-    const pluginVersion     = "2.3b";
+    const pluginVersion     = "2.4";
     const pluginName        = "Airplane Scatter";
     const pluginHomepageUrl = "https://github.com/highpoint2000/AirplaneScatter/releases";
     const pluginUpdateUrl   = "https://raw.githubusercontent.com/Highpoint2000/AirplaneScatter/refs/heads/main/AirplaneScatter/airplanescatter.js";
@@ -115,9 +115,15 @@
     }
 
     // ── Settings ──────────────────────────────────────────────────────────
-    function getInt(val, def) {
+   function getInt(val, def) {
         if (val === null || val === undefined) return def;
         const parsed = parseInt(val, 10);
+        return isNaN(parsed) ? def : parsed;
+    }
+
+    function getFloat(val, def) {
+        if (val === null || val === undefined) return def;
+        const parsed = parseFloat(val);
         return isNaN(parsed) ? def : parsed;
     }
 
@@ -125,7 +131,7 @@
         const storedPhotos = localStorage.getItem('as_show_photos');
         return {
             minTxRxDistKm   : getInt(localStorage.getItem('as_min_txrx_dist'), 400),
-            minTxErpKw      : getInt(localStorage.getItem('as_min_erp'), 100),
+            minTxErpKw      : getFloat(localStorage.getItem('as_min_erp'), 100),
             txRadiusKm      : getInt(localStorage.getItem('as_tx_radius'), 750),
             aircraftRadiusKm: getInt(localStorage.getItem('as_ac_radius'), 750),
             minScore        : getInt(localStorage.getItem('as_min_score'), 70),
@@ -478,7 +484,7 @@
         }
         .as-sub-close {
             background: transparent !important; border: none !important; color: #fff !important;
-            font-size: 20px !important; cursor: pointer !important; padding: 0 4px !important;
+            font-size: 16px !important; cursor: pointer !important; padding: 0 4px !important;
             line-height: 1 !important; margin: 0 0 0 15px !important;
         }
         .as-sub-close:hover { color: #f66 !important; }
@@ -3118,15 +3124,15 @@
     // ── Settings UI ───────────────────────────────────────────────────────
     function buildSettingsPanelHtml(){
         return `<div id="as-settings-panel">
-            <h5>
+            <h5 style="display: block; position: relative; padding-right: 25px;">
                 ⚙ Airplane Scatter Settings
-                <button id="as-settings-close" class="as-sub-close">✕</button>
+                <button id="as-settings-close" class="as-sub-close" style="position: absolute !important; right: -140px !important; top: 0 !important; margin: 0 !important;">✕</button>
             </h5>
             <div class="as-setting-row"><label>Min TX–RX distance</label>
                 <input type="number" id="as-s-txrx" min="50" max="800" step="10" value="${S.minTxRxDistKm}">
                 <span class="as-setting-unit">km</span></div>
             <div class="as-setting-row"><label>Min TX ERP</label>
-                <input type="number" id="as-s-erp" min="1" max="1000" step="1" value="${S.minTxErpKw}">
+                <input type="number" id="as-s-erp" min="0" max="1000" step="any" value="${S.minTxErpKw}">
                 <span class="as-setting-unit">kW</span></div>
             <div class="as-setting-row"><label>Lead time (Visible from)</label>
                 <input type="text" id="as-s-lead" placeholder="mm:ss" value="${formatTimeStr(S.leadTimeSec)}">
@@ -3179,12 +3185,19 @@
         </div>`;
     }
 
-    function initSettingsPanel(){
-        const btn   = document.getElementById('as-settings-btn');
-        const panel = document.getElementById('as-settings-panel');
-        if(!btn || !panel) return;
+function initSettingsPanel(){
+    const btn   = document.getElementById('as-settings-btn');
+    const panel = document.getElementById('as-settings-panel');
+    if(!btn || !panel) return;
 
-        async function checkAvailableFilters() {
+    const closeBtn = document.getElementById('as-settings-close');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+            panel.style.display = 'none';
+        });
+    }
+
+    async function checkAvailableFilters() {
             const checkFile = async (fileName) => {
                 try {
                     const url = `${currentURL.protocol}//${currentURL.host}/plugins/AirplaneScatter/${fileName}?t=${Date.now()}`;
@@ -3225,10 +3238,30 @@
             e.stopPropagation();
             panel.style.display = panel.style.display !== 'none' ? 'none' : 'block';
         });
-        document.getElementById('as-settings-close').onclick = () => panel.style.display = 'none';
-        document.addEventListener('click', e => {
-            if(!panel.contains(e.target) && e.target !== btn) panel.style.display = 'none';
-        });
+
+        const erpInput = document.getElementById('as-s-erp');
+        if (erpInput) {
+            erpInput.step = parseFloat(erpInput.value) <= 1 ? "0.01" : "1";
+            
+            erpInput.addEventListener('input', function() {
+                if (this.value === "1.01") {
+                    this.value = "2";
+                }
+                
+                let val = parseFloat(this.value);
+                if (!isNaN(val)) {
+                    this.step = val <= 1 ? "0.01" : "1";
+                }
+            });
+            
+            erpInput.addEventListener('change', function() {
+                let val = parseFloat(this.value);
+                if (!isNaN(val) && val >= 1) {
+                    this.value = Math.round(val);
+                    this.step = "1"; 
+                }
+            });
+        }
 
         document.getElementById('as-settings-apply').addEventListener('click', () => {
             const v = id => document.getElementById(id).value;
@@ -3236,11 +3269,16 @@
             const isPhotos = document.getElementById('as-s-photos').checked;
             const isRightAlign = document.getElementById('as-s-rightalign').checked;
 
+            // Process ERP value: allow decimals only if strictly < 1
+            let erpVal = parseFloat(v('as-s-erp'));
+            if (isNaN(erpVal)) erpVal = 100;
+            if (erpVal >= 1) erpVal = Math.round(erpVal);
+
             localStorage.setItem('as_use_metric',       isM);
             localStorage.setItem('as_show_photos',      isPhotos);
             localStorage.setItem('as_auto_right_align', isRightAlign);
             localStorage.setItem('as_min_txrx_dist',    v('as-s-txrx'));
-            localStorage.setItem('as_min_erp',          v('as-s-erp'));
+            localStorage.setItem('as_min_erp',          erpVal); // Save the processed value
             localStorage.setItem('as_lead_time_str',    v('as-s-lead'));
             localStorage.setItem('as_trail_time_str',   v('as-s-trail'));
             localStorage.setItem('as_filter_mode',      v('as-s-filter'));
@@ -3287,7 +3325,10 @@
     // ── Main UI Layout ────────────────────────────────────────────────────
     function createMapContainer(rxLat, rxLon){
         if(mapContainer) return;
-        const isMobileOrTablet = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || (window.innerWidth <= 1024);
+        const isMobileOrTablet = (
+			(window.innerWidth <= 1024 || window.innerHeight <= 768) &&
+			(navigator.maxTouchPoints > 0 || window.matchMedia('(pointer: coarse)').matches)
+		);
 
         let startWidth  = parseInt(localStorage.getItem('as_width'))  || 820;
         let startHeight = parseInt(localStorage.getItem('as_height')) || 640;
@@ -4020,9 +4061,10 @@
         const rx = getRxCoords(); if (!rx) return;
         const reloadBtn = document.getElementById('as-reload');
         if (reloadBtn) reloadBtn.classList.add('spinning');
-        updateStatusText('⏳ Loading...', 0, 0, 0);
+        updateStatusText('⏳ Starting update process...', 0, 0, 0);
 
         if (forceReload || _rxTerrainM === 0) {
+            updateStatusText('⏳ Fetching RX elevation from local API / OpenTopoData...', 0, 0, 0);
             _rxTerrainM = await fetchElevationSingle(rx.lat, rx.lon);
             _rxElevM    = _rxTerrainM + S.rxAglM;
             const rxTerrainUI = document.getElementById('as-rx-terrain-val');
@@ -4034,6 +4076,10 @@
         updateRxMarkerTooltip(rx);
 
         try {
+            const cacheValid = isFmdxCacheValid(rx.lat, rx.lon);
+            const fmdxSourceMsg = cacheValid ? "local Browser Cache" : "Server API/Internet";
+            updateStatusText(`⏳ Loading TX database from ${fmdxSourceMsg}...`, 0, 0, 0);
+            
             await Promise.all([
                 loadTxDatabase(rx.lat, rx.lon).then(stations => { txStations = stations; }),
                 
@@ -4042,8 +4088,10 @@
 
             if (!mapActive) { if (reloadBtn) reloadBtn.classList.remove('spinning'); return; }
 
+            updateStatusText('⏳ Enriching TX beam patterns and metadata...', 0, txStations.length, 0);
             await enrichTxBeamData(txStations);
 
+            updateStatusText('⏳ Applying local frequency filters...', 0, txStations.length, 0);
             const freqFilterList = await fetchFrequencyList(S.filterMode);
             if (S.filterMode !== 'none') {
                 if (freqFilterList.size === 0 && S.filterMode === 'whitelist') {
@@ -4060,8 +4108,11 @@
 
             invalidateTxEnvelopeCache();
 
+            updateStatusText('⏳ Building spatial TX grid...', 0, txStations.length, 0);
             txStationGrid = await buildTxGridAsync(txStations);
             updateRxMarkerTooltip(rx);
+            
+            updateStatusText('⏳ Fetching missing TX elevations in background...', 0, txStations.length, 0);
             enrichTxElevations(txStations).then(async () => {
                 if (!mapActive) return;
                 invalidateTxEnvelopeCache();
@@ -4078,6 +4129,7 @@
 
         let fetchedAircraft = [];
         try {
+            updateStatusText('⏳ Fetching live aircraft data from ADS-B API...', 0, txStations.length, 0);
             fetchedAircraft = await fetchAircraft(rx.lat, rx.lon, S.aircraftRadiusKm);
         } catch (e) {
             if (mapActive) updateStatusText('⚠ ADS-B Error: ' + e.message, 0, txStations.length, 0);
@@ -4106,6 +4158,7 @@
             }
         }
 
+        updateStatusText(`⏳ Computing scatter geometry for ${robustList.length} aircraft...`, robustList.length, txStations.length, 0);
         await computePersistentCrossings(robustList, rx.lat, rx.lon);
         if (!mapActive) { if (reloadBtn) reloadBtn.classList.remove('spinning'); return; }
 
@@ -4114,7 +4167,7 @@
         ensureLeaflet(() => { if (mapInstance && mapActive) redrawFiltered(); });
 
         const activeCandsCount = getPrimaryCrossings(getActiveVisibleCrossings()).length;
-        if (mapActive) updateStatusText(new Date().toTimeString().slice(0, 8), robustList.length, txStations.length, activeCandsCount);
+        if (mapActive) updateStatusText('✓ Update complete (' + new Date().toTimeString().slice(0, 8) + ')', robustList.length, txStations.length, activeCandsCount);
         if (reloadBtn) reloadBtn.classList.remove('spinning');
     }
 
