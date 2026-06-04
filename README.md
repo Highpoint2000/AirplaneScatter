@@ -5,11 +5,10 @@ Predicts and visualizes real-time airplane scatter opportunities for FM radio re
 <img width="500" height="480" alt="grafik" src="https://github.com/user-attachments/assets/3c5f25a6-2b73-4b8d-9394-1b1016d3d9c4" />
 <img width="280" height="460" alt="grafik" src="https://github.com/user-attachments/assets/2c74b65f-a049-4ea0-837d-4f3efbbe18a2" />
 
-## Version 2.4
+## Version 2.4b
 
-- Enables a minimum TX ERP of less than 1 kW
-- Full-screen detection optimized for tablets
-- Functionality and positioning of the "Close" (X) button corrected
+- Improved tolerance in line-of-sight calculations
+- Added alternative APIs for aircraft position data
 
 ## Installation notes
 
@@ -65,6 +64,12 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### Version 2.4
+
+- Enables a minimum TX ERP of less than 1 kW
+- Full-screen detection optimized for tablets
+- Functionality and positioning of the "Close" (X) button corrected
 
 ### Version 2.3b (Only compatible with FM DX Webserver version 1.4.0 and above !!!)
 

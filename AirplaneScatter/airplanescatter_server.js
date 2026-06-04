@@ -1,8 +1,8 @@
 /////////////////////////////////////////////////////////////////
 //                                                             //
-//  AIRPLANE SCATTER SERVER PLUGIN FOR FM-DX-WEBSERVER (V2.4) //
+//  AIRPLANE SCATTER SERVER PLUGIN FOR FM-DX-WEBSERVER (V2.4b) //
 //                                                             //
-//  by Highpoint                last update: 2026-05-07        //
+//  by Highpoint                last update: 2026-05-19        //
 //                                                             //
 //  https://github.com/Highpoint2000/AirplaneScatter           //
 //                                                             //
@@ -55,6 +55,8 @@ const PROXY_ALLOWED_DOMAINS = new Set([
     'api.adsb.one',
     'api.adsb.lol',
     'api.adsb.fi',
+    'api.airplanes.live',       // <-- NEU
+    'api.theairtraffic.com',    // <-- NEU
     'api.opentopodata.org',
     'api.open-elevation.com',
     'api.fmlist.org',

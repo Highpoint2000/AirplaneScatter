@@ -1,8 +1,8 @@
 /////////////////////////////////////////////////////////////////
 //                                                             //
-//  AIRPLANE SCATTER CLIENT PLUGIN FOR FM-DX-WEBSERVER (V2.4) //
+//  AIRPLANE SCATTER CLIENT PLUGIN FOR FM-DX-WEBSERVER (V2.4b) //
 //                                                             //
-//  by Highpoint                last update: 2026-05-07        //
+//  by Highpoint                last update: 2026-05-19        //
 //                                                             //
 //  https://github.com/Highpoint2000/AirplaneScatter           //
 //                                                             //
@@ -11,7 +11,7 @@
 (() => {
 
     // ── Plugin metadata & Update Check ────────────────────────────────────
-    const pluginVersion     = "2.4";
+    const pluginVersion     = "2.4b";
     const pluginName        = "Airplane Scatter";
     const pluginHomepageUrl = "https://github.com/highpoint2000/AirplaneScatter/releases";
     const pluginUpdateUrl   = "https://raw.githubusercontent.com/Highpoint2000/AirplaneScatter/refs/heads/main/AirplaneScatter/airplanescatter.js";
@@ -1032,7 +1032,24 @@
         const hrxAtAc = env.hrx_env[idxLo] * (1 - frac) + env.hrx_env[idxHi] * frac;
         const htxAtAc = env.htx_env[idxLo] * (1 - frac) + env.htx_env[idxHi] * frac;
 
-        if (altM < hrxAtAc || altM < htxAtAc) return null;
+        // --- NEW: DIFFRACTION TOLERANCE ---
+        const DIFFRACTION_TOLERANCE_M = 500; // 500m tolerance for knife-edge diffraction/scatter
+
+        // Hard cut-off is now pushed 500m below the calculated radio horizon
+        if (altM < (hrxAtAc - DIFFRACTION_TOLERANCE_M) || altM < (htxAtAc - DIFFRACTION_TOLERANCE_M)) {
+            return null;
+        }
+
+        // Calculate how deep the aircraft is in the "shadow" (0 if in direct line of sight)
+        const shadowDepthTx = Math.max(0, htxAtAc - altM);
+        const shadowDepthRx = Math.max(0, hrxAtAc - altM);
+        const maxShadowDepth = Math.max(shadowDepthTx, shadowDepthRx);
+
+        // Apply a penalty if the plane relies on diffraction (shadow zone)
+        // 0m shadow = multiplier 1.0 (no penalty)
+        // 500m shadow = multiplier 0.2 (heavy penalty, but still valid for the score)
+        const diffractionMultiplier = 1.0 - (maxShadowDepth / DIFFRACTION_TOLERANCE_M) * 0.8;
+        // ----------------------------------
 
         const c_factor = 16.974;
         const bulgeTx  = (d_tx * d_tx) / c_factor;
@@ -1047,7 +1064,9 @@
         const txSigma = 2.0, rxSigma = 8.0;
         const txElevScore  = Math.exp(-(elevAngleTxDeg * elevAngleTxDeg) / (2 * txSigma * txSigma));
         const rxElevScore  = Math.exp(-(elevAngleRxDeg * elevAngleRxDeg) / (2 * rxSigma * rxSigma));
-        const sweetSpotScore = txElevScore * rxElevScore;
+        
+        // Apply the new diffraction multiplier to the base sweetSpotScore
+        const sweetSpotScore = txElevScore * rxElevScore * diffractionMultiplier;
 
         const marginTxM   = altM - htxAtAc;
         const marginRxM   = altM - hrxAtAc;
@@ -3975,6 +3994,34 @@ function initSettingsPanel(){
                 type: a.t || null,
                 category: getCustomCategory(a.t) || a.category || null
             })) : []
+        },
+				{
+            name: 'airplanes.live',
+            buildUrl: (lat, lon, km) => proxyUrl('https://api.airplanes.live/v2/point/' + lat.toFixed(4) + '/' + lon.toFixed(4) + '/' + Math.min(Math.max(Math.round(km * 0.53996), 1), 250)),
+            parse: d => d?.ac ? d.ac.filter(a => a.lat && a.lon && a.alt_baro !== 'ground').map(a => ({
+                icao24: a.hex, lat: parseFloat(a.lat), lon: parseFloat(a.lon),
+                alt_ft: typeof a.alt_baro === 'number' ? a.alt_baro : (typeof a.alt_geom === 'number' ? a.alt_geom : 0),
+                speed: typeof a.gs === 'number' ? a.gs : 0,
+                track: typeof a.track === 'number' ? a.track : null,
+                vspeed: typeof a.baro_rate === 'number' ? a.baro_rate : 0,
+                callsign: (a.flight || a.hex || '').trim(),
+                type: a.t || null,
+                category: getCustomCategory(a.t) || a.category || null
+            })) : []
+        },
+        {
+            name: 'theairtraffic.com',
+            buildUrl: (lat, lon, km) => proxyUrl('https://api.theairtraffic.com/v2/point/' + lat.toFixed(4) + '/' + lon.toFixed(4) + '/' + Math.min(Math.max(Math.round(km * 0.53996), 1), 250)),
+            parse: d => d?.ac ? d.ac.filter(a => a.lat && a.lon && a.alt_baro !== 'ground').map(a => ({
+                icao24: a.hex, lat: parseFloat(a.lat), lon: parseFloat(a.lon),
+                alt_ft: typeof a.alt_baro === 'number' ? a.alt_baro : (typeof a.alt_geom === 'number' ? a.alt_geom : 0),
+                speed: typeof a.gs === 'number' ? a.gs : 0,
+                track: typeof a.track === 'number' ? a.track : null,
+                vspeed: typeof a.baro_rate === 'number' ? a.baro_rate : 0,
+                callsign: (a.flight || a.hex || '').trim(),
+                type: a.t || null,
+                category: getCustomCategory(a.t) || a.category || null
+            })) : []
         }
     ];
 
@@ -3994,7 +4041,7 @@ function initSettingsPanel(){
 
     let _adsbSourceIndex = 0;
 
-    async function fetchAircraft(lat, lon, radiusKm) {
+async function fetchAircraft(lat, lon, radiusKm) {
         if(!mapActive) return [];
         radiusKm = (radiusKm && !isNaN(radiusKm) && radiusKm > 0) ? radiusKm : 750;
         const tilePoints  = getTilePoints(lat, lon, radiusKm);
@@ -4005,9 +4052,8 @@ function initSettingsPanel(){
 
         for (const point of tilePoints) {
             if (!mapActive) break;
-            for (let attempt = 0; attempt < ADSB_SOURCES.length; attempt++) {
-                const srcIdx = (_adsbSourceIndex + attempt) % ADSB_SOURCES.length;
-                const src    = ADSB_SOURCES[srcIdx];
+            
+            const fetchPromises = ADSB_SOURCES.map(async (src) => {
                 try {
                     const reqUrl = src.buildUrl(point.lat, point.lon, perTileKm);
                     const ctrl   = new AbortController();
@@ -4017,26 +4063,31 @@ function initSettingsPanel(){
                     
                     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                     
+                    const contentType = resp.headers.get("content-type");
+                    if (!contentType || !contentType.includes("application/json")) {
+                        throw new Error(`API blockiert (Content-Type: ${contentType})`);
+                    }
+
                     const data = src.parse(await resp.json());
-                    _adsbSourceIndex = srcIdx;
+                    
                     data.forEach(ac => {
-                        if (!allAircraft.has(ac.icao24) &&
-                            haversineKm(lat, lon, ac.lat, ac.lon) <= radiusKm) {
+                        if (haversineKm(lat, lon, ac.lat, ac.lon) <= radiusKm) {
                             allAircraft.set(ac.icao24, ac);
                         }
                     });
-                    break; 
                 } catch (err) {
-                    console.warn(`[Airplane Scatter] ADS-B Source Failed: ${src.name} | Error:`, err.message);
+                    console.warn(`[Airplane Scatter] ADS-B Quelle ignoriert: ${src.name} | Grund:`, err.message);
                 }
-            }
+            });
+
+            await Promise.all(fetchPromises);
             
             if (tilePoints.length > 1) {
                 await sleep(500); 
             }
         }
 
-        if (allAircraft.size === 0 && mapActive) throw new Error('All ADS-B APIs unavailable or rate limited');
+        if (allAircraft.size === 0 && mapActive) throw new Error('Alle ADS-B APIs sind momentan unerreichbar oder blockiert.');
         return Array.from(allAircraft.values());
     }
 
